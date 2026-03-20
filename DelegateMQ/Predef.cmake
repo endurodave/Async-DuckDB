@@ -6,11 +6,41 @@ if (DMQ_THREAD STREQUAL "DMQ_THREAD_STDLIB")
         "${DMQ_ROOT_DIR}/predef/os/stdlib/*.c*" 
         "${DMQ_ROOT_DIR}/predef/os/stdlib/*.h" 
     )
+elseif (DMQ_THREAD STREQUAL "DMQ_THREAD_WIN32")
+    add_compile_definitions(DMQ_THREAD_WIN32)
+    file(GLOB THREAD_SOURCES 
+        "${DMQ_ROOT_DIR}/predef/os/win32/*.c*" 
+        "${DMQ_ROOT_DIR}/predef/os/win32/*.h" 
+    )
 elseif (DMQ_THREAD STREQUAL "DMQ_THREAD_FREERTOS")
     add_compile_definitions(DMQ_THREAD_FREERTOS)
     file(GLOB THREAD_SOURCES 
         "${DMQ_ROOT_DIR}/predef/os/freertos/*.c*" 
         "${DMQ_ROOT_DIR}/predef/os/freertos/*.h" 
+    )
+elseif (DMQ_THREAD STREQUAL "DMQ_THREAD_THREADX")
+    add_compile_definitions(DMQ_THREAD_THREADX)
+    file(GLOB THREAD_SOURCES 
+        "${DMQ_ROOT_DIR}/predef/os/threadx/*.c*" 
+        "${DMQ_ROOT_DIR}/predef/os/threadx/*.h" 
+    )
+elseif (DMQ_THREAD STREQUAL "DMQ_THREAD_ZEPHYR")
+    add_compile_definitions(DMQ_THREAD_ZEPHYR)
+    file(GLOB THREAD_SOURCES 
+        "${DMQ_ROOT_DIR}/predef/os/zephyr/*.c*" 
+        "${DMQ_ROOT_DIR}/predef/os/zephyr/*.h" 
+    )
+elseif (DMQ_THREAD STREQUAL "DMQ_THREAD_CMSIS_RTOS2")
+    add_compile_definitions(DMQ_THREAD_CMSIS_RTOS2)
+    file(GLOB THREAD_SOURCES
+        "${DMQ_ROOT_DIR}/predef/os/cmsis-rtos2/*.c*"
+        "${DMQ_ROOT_DIR}/predef/os/cmsis-rtos2/*.h"
+    )
+elseif (DMQ_THREAD STREQUAL "DMQ_THREAD_QT")
+    add_compile_definitions(DMQ_THREAD_QT)
+    file(GLOB THREAD_SOURCES
+        "${DMQ_ROOT_DIR}/predef/os/qt/*.c*"
+        "${DMQ_ROOT_DIR}/predef/os/qt/*.h"
     )
 elseif (DMQ_THREAD STREQUAL "DMQ_THREAD_NONE")
     add_compile_definitions(DMQ_THREAD_NONE)
@@ -56,9 +86,33 @@ elseif (DMQ_TRANSPORT STREQUAL "DMQ_TRANSPORT_WIN32_PIPE")
 elseif (DMQ_TRANSPORT STREQUAL "DMQ_TRANSPORT_WIN32_UDP")
     add_compile_definitions(DMQ_TRANSPORT_WIN32_UDP)
     file(GLOB TRANSPORT_SOURCES "${DMQ_ROOT_DIR}/predef/transport/win32-udp/*.h")
+elseif (DMQ_TRANSPORT STREQUAL "DMQ_TRANSPORT_WIN32_TCP")
+    add_compile_definitions(DMQ_TRANSPORT_WIN32_TCP)
+    file(GLOB TRANSPORT_SOURCES "${DMQ_ROOT_DIR}/predef/transport/win32-tcp/*.h")
 elseif (DMQ_TRANSPORT STREQUAL "DMQ_TRANSPORT_LINUX_UDP")
     add_compile_definitions(DMQ_TRANSPORT_LINUX_UDP)
     file(GLOB TRANSPORT_SOURCES "${DMQ_ROOT_DIR}/predef/transport/linux-udp/*.h")
+elseif (DMQ_TRANSPORT STREQUAL "DMQ_TRANSPORT_LINUX_TCP")
+    add_compile_definitions(DMQ_TRANSPORT_LINUX_TCP)
+    file(GLOB TRANSPORT_SOURCES "${DMQ_ROOT_DIR}/predef/transport/linux-tcp/*.h")
+elseif (DMQ_TRANSPORT STREQUAL "DMQ_TRANSPORT_SERIAL_PORT")
+    add_compile_definitions(DMQ_TRANSPORT_SERIAL_PORT)
+    file(GLOB TRANSPORT_SOURCES "${DMQ_ROOT_DIR}/predef/transport/serial/*.h")
+elseif (DMQ_TRANSPORT STREQUAL "DMQ_TRANSPORT_ARM_LWIP_UDP")
+    add_compile_definitions(DMQ_TRANSPORT_ARM_LWIP_UDP)
+    file(GLOB TRANSPORT_SOURCES "${DMQ_ROOT_DIR}/predef/transport/arm-lwip-udp/*.h")
+elseif (DMQ_TRANSPORT STREQUAL "DMQ_TRANSPORT_ARM_LWIP_NETCONN_UDP")
+    add_compile_definitions(DMQ_TRANSPORT_ARM_LWIP_NETCONN_UDP)
+    file(GLOB TRANSPORT_SOURCES "${DMQ_ROOT_DIR}/predef/transport/arm-lwip-netconn-udp/*.h")    
+elseif (DMQ_TRANSPORT STREQUAL "DMQ_TRANSPORT_THREADX_UDP")
+    add_compile_definitions(DMQ_TRANSPORT_THREADX_UDP)
+    file(GLOB TRANSPORT_SOURCES "${DMQ_ROOT_DIR}/predef/transport/netx-udp/*.h")
+elseif (DMQ_TRANSPORT STREQUAL "DMQ_TRANSPORT_STM32_UART")
+    add_compile_definitions(DMQ_TRANSPORT_STM32_UART)
+    file(GLOB TRANSPORT_SOURCES "${DMQ_ROOT_DIR}/predef/transport/stm32-uart/*.h")
+elseif (DMQ_TRANSPORT STREQUAL "DMQ_TRANSPORT_ZEPHYR_UDP")
+    add_compile_definitions(DMQ_TRANSPORT_ZEPHYR_UDP)
+    file(GLOB TRANSPORT_SOURCES "${DMQ_ROOT_DIR}/predef/transport/zephyr-udp/*.h")
 else()
     message(FATAL_ERROR "Must set DMQ_TRANSPORT option.")
 endif()

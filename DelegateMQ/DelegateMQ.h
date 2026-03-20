@@ -69,10 +69,16 @@
 // - FreeRTOS: Uses FreeRTOSRecursiveMutex
 // - Bare Metal: Uses NullMutex
 // - StdLib: Uses std::recursive_mutex
-#if defined(DMQ_THREAD_STDLIB) || defined(DMQ_THREAD_FREERTOS) || defined(DMQ_THREAD_NONE)
+// Valid for any platform where a Mutex is defined in DelegateOpt.h
+#if defined(DMQ_THREAD_STDLIB) || \
+    defined(DMQ_THREAD_WIN32) || \
+    defined(DMQ_THREAD_FREERTOS) || \
+    defined(DMQ_THREAD_THREADX) || \
+    defined(DMQ_THREAD_ZEPHYR) || \
+    defined(DMQ_THREAD_CMSIS_RTOS2) || \
+    defined(DMQ_THREAD_QT)
     #include "delegate/MulticastDelegateSafe.h"
     #include "delegate/UnicastDelegateSafe.h"
-    #include "delegate/SignalSafe.h"
 #endif
 
 // -----------------------------------------------------------------------------
@@ -80,31 +86,53 @@
 // -----------------------------------------------------------------------------
 // - FreeRTOS: OK 
 // - Bare Metal: OK (Requires you to implement IThread wrapper for Event Loop)
-// - StdLib: OK
-#if defined(DMQ_THREAD_STDLIB) || defined(DMQ_THREAD_FREERTOS) || defined(DMQ_THREAD_NONE)
+// - StdLib / Win32: OK
+// Valid for any platform that implements the IThread interface
+#if defined(DMQ_THREAD_STDLIB) || \
+    defined(DMQ_THREAD_WIN32) || \
+    defined(DMQ_THREAD_FREERTOS) || \
+    defined(DMQ_THREAD_THREADX) || \
+    defined(DMQ_THREAD_ZEPHYR) || \
+    defined(DMQ_THREAD_CMSIS_RTOS2) || \
+    defined(DMQ_THREAD_QT)
     #include "delegate/DelegateAsync.h"
 #endif
 
 // -----------------------------------------------------------------------------
 // 4. Asynchronous "Blocking" Delegates (Wait for Result)
 // -----------------------------------------------------------------------------
-// - FreeRTOS: NO (Requires Semaphore/Condition Variable)
-// - Bare Metal: NO (Cannot block/sleep)
-// - StdLib: OK
-#if defined(DMQ_THREAD_STDLIB)
+// Depends on Semaphore/Mutex and C++17 (std::any, std::optional).
+// Valid for StdLib/Win32 (Windows/Linux), Qt, ThreadX, and FreeRTOS (if C++17 enabled).
+#if defined(DMQ_THREAD_STDLIB) || defined(DMQ_THREAD_WIN32) || defined(DMQ_THREAD_QT) || defined(DMQ_THREAD_FREERTOS) || defined(DMQ_THREAD_THREADX)
     #include "delegate/DelegateAsyncWait.h"
 #endif
 
 #if defined(DMQ_THREAD_STDLIB)
     #include "predef/os/stdlib/Thread.h"
     #include "predef/os/stdlib/ThreadMsg.h"
+#elif defined(DMQ_THREAD_WIN32)
+    #include "predef/os/win32/Thread.h"
+    #include "predef/os/win32/ThreadMsg.h"
 #elif defined(DMQ_THREAD_FREERTOS)
     #include "predef/os/freertos/Thread.h"
     #include "predef/os/freertos/ThreadMsg.h"
+#elif defined(DMQ_THREAD_THREADX)
+    #include "predef/os/threadx/Thread.h"
+    #include "predef/os/threadx/ThreadMsg.h"
+#elif defined(DMQ_THREAD_ZEPHYR)
+    #include "predef/os/zephyr/Thread.h"
+    #include "predef/os/zephyr/ThreadMsg.h"
+#elif defined(DMQ_THREAD_CMSIS_RTOS2)
+    #include "predef/os/cmsis-rtos2/Thread.h"
+    #include "predef/os/cmsis-rtos2/ThreadMsg.h"
+#elif defined(DMQ_THREAD_QT)
+    #include "predef/os/qt/Thread.h"
+    #include "predef/os/qt/ThreadMsg.h"
 #elif defined(DMQ_THREAD_NONE)
     // Bare metal: User must implement their own polling/interrupt logic
 #else
-    #error "Thread implementation not found."
+    #warning "Thread implementation not found."
+    #define DMQ_THREAD_NONE
 #endif
 
 #if defined(DMQ_SERIALIZE_MSGPACK)
@@ -120,7 +148,7 @@
 #elif defined(DMQ_SERIALIZE_NONE)
     // Create a custom application-specific serializer
 #else
-    #error "Serialize implementation not found."
+    #warning "Serialize implementation not found."
 #endif
 
 #if defined(DMQ_TRANSPORT_ZEROMQ)
@@ -135,20 +163,58 @@
 #elif defined(DMQ_TRANSPORT_WIN32_UDP)
     #include "predef/dispatcher/Dispatcher.h"
     #include "predef/transport/win32-udp/Win32UdpTransport.h"
+#elif defined(DMQ_TRANSPORT_WIN32_TCP)
+    #include "predef/dispatcher/Dispatcher.h"
+    #include "predef/transport/win32-tcp/Win32TcpTransport.h"
 #elif defined(DMQ_TRANSPORT_LINUX_UDP)
     #include "predef/dispatcher/Dispatcher.h"
     #include "predef/transport/linux-udp/LinuxUdpTransport.h"
+#elif defined(DMQ_TRANSPORT_LINUX_TCP)
+    #include "predef/dispatcher/Dispatcher.h"
+    #include "predef/transport/linux-tcp/LinuxTcpTransport.h"
 #elif defined(DMQ_TRANSPORT_MQTT)
     #include "predef/dispatcher/Dispatcher.h"
     #include "predef/transport/mqtt/MqttTransport.h"
+#elif defined(DMQ_TRANSPORT_SERIAL_PORT)
+    #include "predef/dispatcher/Dispatcher.h"
+    #include "predef/transport/serial/SerialTransport.h"
+#elif defined(DMQ_TRANSPORT_ARM_LWIP_UDP)
+    #include "predef/dispatcher/Dispatcher.h"
+    #include "predef/transport/arm-lwip-udp/ArmLwipUdpTransport.h"
+#elif defined(DMQ_TRANSPORT_ARM_LWIP_NETCONN_UDP)
+    #include "predef/dispatcher/Dispatcher.h"
+    #include "predef/transport/arm-lwip-netconn-udp/ArmLwipNetconnUdpTransport.h"
+#elif defined(DMQ_TRANSPORT_THREADX_UDP)
+    #include "predef/dispatcher/Dispatcher.h"
+    #include "predef/transport/threadx-udp/NetXUdpTransport.h"
+#elif defined(DMQ_TRANSPORT_STM32_UART)
+    #include "predef/dispatcher/Dispatcher.h"
+    #include "predef/transport/stm32-uart/Stm32UartTransport.h"
+#elif defined(DMQ_TRANSPORT_ZEPHYR_UDP)
+    #include "predef/dispatcher/Dispatcher.h"
+    #include "predef/transport/zephyr-udp/ZephyrUdpTransport.h"
 #elif defined(DMQ_TRANSPORT_NONE)
-    // Create a custom application-specific transport
+    // No built-in transport. Include the interface and dispatcher so application code
+    // can implement a custom ITransport and use RemoteChannel with a mock or stub.
+    #include "predef/dispatcher/Dispatcher.h"
+    #include "predef/transport/ITransport.h"
 #else
-    #error "Transport implementation not found."
+    #warning "Transport implementation not found."
 #endif
 
-#if defined(DMQ_TRANSPORT_ZEROMQ) || defined(DMQ_TRANSPORT_WIN32_UDP) || defined(DMQ_TRANSPORT_LINUX_UDP)
-    #include "predef/util/NetworkEngine.h"
+// Include RemoteChannel whenever Dispatcher.h has been included (all transport
+// configurations including NONE, where a mock ITransport can be supplied).
+// RemoteChannel aggregates dispatcher, serializer, and stream into one object,
+// mirroring how Thread aggregates async delegate wiring behind a single IThread.
+#if defined(DMQ_TRANSPORT_ZEROMQ) || defined(DMQ_TRANSPORT_NNG) || \
+    defined(DMQ_TRANSPORT_WIN32_PIPE) || defined(DMQ_TRANSPORT_WIN32_UDP) || \
+    defined(DMQ_TRANSPORT_WIN32_TCP) || defined(DMQ_TRANSPORT_LINUX_UDP) || \
+    defined(DMQ_TRANSPORT_LINUX_TCP) || defined(DMQ_TRANSPORT_MQTT) || \
+    defined(DMQ_TRANSPORT_SERIAL_PORT) || defined(DMQ_TRANSPORT_ARM_LWIP_UDP) || \
+    defined(DMQ_TRANSPORT_ARM_LWIP_NETCONN_UDP) || defined(DMQ_TRANSPORT_THREADX_UDP) || \
+    defined(DMQ_TRANSPORT_STM32_UART) || defined(DMQ_TRANSPORT_ZEPHYR_UDP) || \
+    defined(DMQ_TRANSPORT_NONE)
+    #include "predef/dispatcher/RemoteChannel.h"
 #endif
 
 #include "predef/util/Fault.h"
@@ -158,6 +224,13 @@
     #include "predef/util/Timer.h"
     #include "predef/util/AsyncInvoke.h"
     #include "predef/util/TransportMonitor.h"
+#endif
+
+// Only include NetworkEngine if a transport that uses it is active
+#if defined(DMQ_TRANSPORT_ZEROMQ) || defined(DMQ_TRANSPORT_WIN32_UDP) || \
+    defined(DMQ_TRANSPORT_LINUX_UDP) || defined(DMQ_TRANSPORT_STM32_UART) || \
+    defined(DMQ_TRANSPORT_SERIAL_PORT)
+    #include "predef/util/NetworkEngine.h"
 #endif
 
 #endif

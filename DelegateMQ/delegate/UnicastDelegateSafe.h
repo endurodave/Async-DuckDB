@@ -10,7 +10,7 @@
 namespace dmq {
 
 template <class R>
-struct UnicastDelegateSafe; // Not defined
+class UnicastDelegateSafe; // Not defined
 
 /// @brief A thread-safe delegate container storing one delegate. Void and  
 /// non-void return values supported. 
@@ -22,7 +22,7 @@ public:
     using BaseType = UnicastDelegate<RetType(Args...)>;
 
     UnicastDelegateSafe() = default;
-    ~UnicastDelegateSafe() = default;
+    virtual ~UnicastDelegateSafe() = default;
 
     UnicastDelegateSafe(const UnicastDelegateSafe& rhs) : BaseType() {
         std::lock_guard<RecursiveMutex> lock(rhs.m_lock);
@@ -34,12 +34,24 @@ public:
         BaseType::operator=(std::move(rhs));
     }
 
+    /// Constructor to initialize from a Delegate (Copy)
+    UnicastDelegateSafe(const DelegateType& d) {
+        std::lock_guard<RecursiveMutex> lock(m_lock);
+        BaseType::operator=(d);
+    }
+
+    /// Constructor to initialize from a Delegate (Move)
+    UnicastDelegateSafe(DelegateType&& d) {
+        std::lock_guard<RecursiveMutex> lock(m_lock);
+        BaseType::operator=(std::move(d));
+    }
+
     /// Invoke the bound target.
     /// @param[in] args The arguments used when invoking the target function
     /// @return The target function return value. 
     RetType operator()(Args... args) {
         const std::lock_guard<RecursiveMutex> lock(m_lock);
-        BaseType::operator ()(args...);
+        return BaseType::operator ()(args...);
     }
 
     /// Invoke the bound target functions. 

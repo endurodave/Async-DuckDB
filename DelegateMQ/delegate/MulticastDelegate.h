@@ -14,7 +14,7 @@
 namespace dmq {
 
 template <class R>
-struct MulticastDelegate; // Not defined
+class MulticastDelegate; // Not defined
 
 /// @brief Not thread-safe multicast delegate container class. The class has a list of 
 /// `Delegate<>` instances. When invoked, each `Delegate` instance within the invocation 
@@ -26,7 +26,7 @@ public:
     using DelegateType = Delegate<RetType(Args...)>;
 
     MulticastDelegate() = default;
-    ~MulticastDelegate() { Clear(); }
+    virtual ~MulticastDelegate() { Clear(); }
 
     /// @brief Copy constructor that creates a copy of the given instance.
     /// @details This constructor initializes a new object as a copy of the 
@@ -38,6 +38,16 @@ public:
     /// @brief Move constructor that transfers ownership of resources.
     /// @param[in] rhs The object to move from.
     MulticastDelegate(MulticastDelegate&& rhs) noexcept : m_delegates(std::move(rhs.m_delegates)) { }
+
+    /// Constructor to initialize from a single Delegate (Copy)
+    MulticastDelegate(const DelegateType& d) {
+        PushBack(d);
+    }
+
+    /// Constructor to initialize from a single Delegate (Move)
+    MulticastDelegate(DelegateType&& d) {
+        PushBack(d);
+    }
 
     /// Invoke all bound target functions. Safe to remove delegates during invocation.
     /// A void return value is used since multiple targets invoked.
@@ -104,11 +114,19 @@ public:
 
     /// Insert a delegate into the container.
     /// @param[in] delegate A delegate target to insert
-    void PushBack(const DelegateType& delegate) { 
+    void PushBack(const DelegateType& delegate) {
         auto delegateClone = delegate.Clone();
         if (!delegateClone)
             BAD_ALLOC();
 
+#if !defined(__cpp_exceptions) || defined(DMQ_ASSERTS)
+        // No exceptions: Direct execution. 
+        // If shared_ptr or vector allocation fails here on embedded, 
+        // standard behavior is usually an abort() or system reset.
+        std::shared_ptr<DelegateType> sharedDelegate(delegateClone);
+        m_delegates.push_back(std::forward<std::shared_ptr<DelegateType>>(sharedDelegate));
+#else
+        // Exceptions enabled: Safe to try-catch.
         try {
             std::shared_ptr<DelegateType> sharedDelegate(delegateClone);
             m_delegates.push_back(std::forward<std::shared_ptr<DelegateType>>(sharedDelegate));
@@ -116,6 +134,7 @@ public:
         catch (const std::bad_alloc&) {
             BAD_ALLOC();
         }
+#endif
     }
 
     /// Remove a delegate into the container.
@@ -161,11 +180,18 @@ private:
     /// Copy all delegate container objects.
     /// @param[in] other The container to copy from
     void CopyFrom(const MulticastDelegate& other) {
-        for (auto delegate : other.m_delegates) {
+        for (auto& delegate : other.m_delegates) {
+            if (!delegate) continue;  // Skip soft-deleted entries (mid-broadcast nulls)
             auto delegateClone = delegate->Clone();
             if (!delegateClone)
                 BAD_ALLOC();
 
+#if !defined(__cpp_exceptions) || defined(DMQ_ASSERTS)
+            // No exceptions: Direct execution.
+            std::shared_ptr<DelegateType> sharedDelegate(delegateClone);
+            m_delegates.push_back(sharedDelegate);
+#else
+            // Exceptions enabled: Safe to try-catch.
             try {
                 std::shared_ptr<DelegateType> sharedDelegate(delegateClone);
                 m_delegates.push_back(sharedDelegate);
@@ -173,6 +199,7 @@ private:
             catch (const std::bad_alloc&) {
                 BAD_ALLOC();
             }
+#endif
         }
     }
 

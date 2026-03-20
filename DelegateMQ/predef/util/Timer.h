@@ -1,7 +1,7 @@
 #ifndef _TIMER_H
 #define _TIMER_H
 
-#include "../../delegate/SignalSafe.h"
+#include "../../delegate/Signal.h"
 #include <list>
 
 /// @brief A thread-safe timer class that provides periodic or one-shot callbacks.
@@ -26,9 +26,10 @@
 /// @see SafeTimer.cpp for examples on how to handle callbacks safely with object lifetimes.
 class Timer
 {
+    XALLOCATOR
 public:
-    /// Client's register with OnExpired to get timer callbacks
-    dmq::SignalPtr<void(void)> OnExpired;
+    /// Clients connect to OnExpired to get timer expiration callbacks.
+    dmq::Signal<void(void)> OnExpired;
 
     /// Constructor
     Timer(void);

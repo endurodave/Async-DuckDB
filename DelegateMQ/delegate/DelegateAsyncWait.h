@@ -140,7 +140,7 @@ private:
 };
 
 template <class R>
-struct DelegateFreeAsyncWait; // Not defined
+class DelegateFreeAsyncWait; // Not defined
 
 /// @brief `DelegateFreeAsyncWait<>` class asynchronously block invokes a free target function.
 /// @tparam RetType The return type of the bound delegate function.
@@ -238,10 +238,11 @@ public:
         if (&rhs != this) {
             BaseType::operator=(std::move(rhs));
             m_thread = rhs.m_thread;    // Use the resource
-            m_priority = rhs.m_priority;    
-            m_timeout = rhs.m_timeout;    
+            m_priority = rhs.m_priority;
+            m_timeout = rhs.m_timeout;
             m_success = rhs.m_success;
             m_retVal = rhs.m_retVal;
+            rhs.Clear();
         }
         return *this;
     }
@@ -324,13 +325,12 @@ public:
             return BaseType::operator()(std::forward<Args>(args)...);
         } else {
             // Create a clone instance of this delegate 
-            auto delegate = std::shared_ptr<ClassType>(Clone());
+            auto delegate = xmake_shared<ClassType>(*this);
             if (!delegate)
                 BAD_ALLOC();
 
             // Create a new message instance for sending to the destination thread.
-            // If using XALLOCATOR explicit operator new required. See xallocator.h.
-            std::shared_ptr<DelegateAsyncWaitMsg<Args...>> msg(new DelegateAsyncWaitMsg<Args...>(delegate, m_priority, std::forward<Args>(args)...));
+            auto msg = xmake_shared<DelegateAsyncWaitMsg<Args...>>(delegate, m_priority, std::forward<Args>(args)...);
             if (!msg)
                 BAD_ALLOC();
             msg->SetInvokerWaiting(true);
@@ -437,12 +437,27 @@ public:
     /// Get the asynchronous function return value
     /// @return The destination thread target function return value
     RetType GetRetVal() noexcept {
+        // Use pointer cast if exceptions are disabled OR if user requested Asserts-only mode
+#if !defined(__cpp_exceptions) || defined(DMQ_ASSERTS)
+        // Fast, non-throwing check suitable for Embedded/Real-time
+        auto* p = std::any_cast<RetType>(&m_retVal);
+        if (p) return *p;
+
+        // Optional: If you want to trap this error in debug mode
+#if defined(DMQ_ASSERTS)
+        ASSERT();
+#endif
+
+        return RetType();
+#else
+        // Standard C++ behavior with Exception Handling
         try {
             return std::any_cast<RetType>(m_retVal);
         }
         catch (const std::bad_any_cast&) {
-            return RetType();  // Return a default value if error
+            return RetType();
         }
+#endif
     }
 
     ///@brief Get the destination thread that the target function is invoked on.
@@ -477,7 +492,7 @@ private:
 };
 
 template <class C, class R>
-struct DelegateMemberAsyncWait; // Not defined
+class DelegateMemberAsyncWait; // Not defined
 
 /// @brief `DelegateMemberAsyncWait<>` class asynchronously block invokes a class member target function.
 /// @tparam TClass The class type that contains the member function.
@@ -659,10 +674,11 @@ public:
         if (&rhs != this) {
             BaseType::operator=(std::move(rhs));
             m_thread = rhs.m_thread;    // Use the resource
-            m_priority = rhs.m_priority;    
-            m_timeout = rhs.m_timeout;    
+            m_priority = rhs.m_priority;
+            m_timeout = rhs.m_timeout;
             m_success = rhs.m_success;
             m_retVal = rhs.m_retVal;
+            rhs.Clear();
         }
         return *this;
     }
@@ -745,13 +761,12 @@ public:
             return BaseType::operator()(std::forward<Args>(args)...);
         } else {
             // Create a clone instance of this delegate 
-            auto delegate = std::shared_ptr<ClassType>(Clone());
+            auto delegate = xmake_shared<ClassType>(*this);
             if (!delegate)
                 BAD_ALLOC();
 
             // Create a new message instance for sending to the destination thread.
-            // If using XALLOCATOR explicit operator new required. See xallocator.h.
-            std::shared_ptr<DelegateAsyncWaitMsg<Args...>> msg(new DelegateAsyncWaitMsg<Args...>(delegate, m_priority, std::forward<Args>(args)...));
+            auto msg = xmake_shared<DelegateAsyncWaitMsg<Args...>>(delegate, m_priority, std::forward<Args>(args)...);
             if (!msg)
                 BAD_ALLOC();
             msg->SetInvokerWaiting(true);
@@ -858,12 +873,27 @@ public:
     /// Get the asynchronous function return value
     /// @return The destination thread target function return value
     RetType GetRetVal() noexcept {
+        // Use pointer cast if exceptions are disabled OR if user requested Asserts-only mode
+#if !defined(__cpp_exceptions) || defined(DMQ_ASSERTS)
+        // Fast, non-throwing check suitable for Embedded/Real-time
+        auto* p = std::any_cast<RetType>(&m_retVal);
+        if (p) return *p;
+
+        // Optional: If you want to trap this error in debug mode
+#if defined(DMQ_ASSERTS)
+        ASSERT();
+#endif
+
+        return RetType();
+#else
+        // Standard C++ behavior with Exception Handling
         try {
             return std::any_cast<RetType>(m_retVal);
         }
         catch (const std::bad_any_cast&) {
-            return RetType();  // Return a default value if error
+            return RetType();
         }
+#endif
     }
 
     ///@brief Get the destination thread that the target function is invoked on.
@@ -898,7 +928,7 @@ private:
 };
 
 template <class C, class R>
-struct DelegateMemberAsyncWaitSp; // Not defined
+class DelegateMemberAsyncWaitSp; // Not defined
 
 /// @brief `DelegateMemberAsyncWaitSp<>` class asynchronously block invokes a class member target function
 /// using a weak/shared pointer semantics.
@@ -997,10 +1027,11 @@ public:
         if (&rhs != this) {
             BaseType::operator=(std::move(rhs));
             m_thread = rhs.m_thread;    // Use the resource
-            m_priority = rhs.m_priority;    
-            m_timeout = rhs.m_timeout;    
+            m_priority = rhs.m_priority;
+            m_timeout = rhs.m_timeout;
             m_success = rhs.m_success;
             m_retVal = rhs.m_retVal;
+            rhs.Clear();
         }
         return *this;
     }
@@ -1083,13 +1114,12 @@ public:
             return BaseType::operator()(std::forward<Args>(args)...);
         } else {
             // Create a clone instance of this delegate 
-            auto delegate = std::shared_ptr<ClassType>(Clone());
+            auto delegate = xmake_shared<ClassType>(*this);
             if (!delegate)
                 BAD_ALLOC();
 
             // Create a new message instance for sending to the destination thread.
-            // If using XALLOCATOR explicit operator new required. See xallocator.h.
-            std::shared_ptr<DelegateAsyncWaitMsg<Args...>> msg(new DelegateAsyncWaitMsg<Args...>(delegate, m_priority, std::forward<Args>(args)...));
+            auto msg = xmake_shared<DelegateAsyncWaitMsg<Args...>>(delegate, m_priority, std::forward<Args>(args)...);
             if (!msg)
                 BAD_ALLOC();
             msg->SetInvokerWaiting(true);
@@ -1196,12 +1226,27 @@ public:
     /// Get the asynchronous function return value
     /// @return The destination thread target function return value
     RetType GetRetVal() noexcept {
+        // Use pointer cast if exceptions are disabled OR if user requested Asserts-only mode
+#if !defined(__cpp_exceptions) || defined(DMQ_ASSERTS)
+        // Fast, non-throwing check suitable for Embedded/Real-time
+        auto* p = std::any_cast<RetType>(&m_retVal);
+        if (p) return *p;
+
+        // Optional: If you want to trap this error in debug mode
+#if defined(DMQ_ASSERTS)
+        ASSERT();
+#endif
+
+        return RetType();
+#else
+        // Standard C++ behavior with Exception Handling
         try {
             return std::any_cast<RetType>(m_retVal);
         }
         catch (const std::bad_any_cast&) {
-            return RetType();  // Return a default value if error
+            return RetType();
         }
+#endif
     }
 
     ///@brief Get the destination thread that the target function is invoked on.
@@ -1236,7 +1281,7 @@ private:
 };
 
 template <class R>
-struct DelegateFunctionAsyncWait; // Not defined
+class DelegateFunctionAsyncWait; // Not defined
 
 /// @brief `DelegateFunctionAsyncWait<>` class asynchronously block invokes a std::function target function.
 /// 
@@ -1337,10 +1382,11 @@ public:
         if (&rhs != this) {
             BaseType::operator=(std::move(rhs));
             m_thread = rhs.m_thread;    // Use the resource
-            m_priority = rhs.m_priority;    
-            m_timeout = rhs.m_timeout;    
+            m_priority = rhs.m_priority;
+            m_timeout = rhs.m_timeout;
             m_success = rhs.m_success;
             m_retVal = rhs.m_retVal;
+            rhs.Clear();
         }
         return *this;
     }
@@ -1423,13 +1469,12 @@ public:
             return BaseType::operator()(std::forward<Args>(args)...);
         } else {
             // Create a clone instance of this delegate 
-            auto delegate = std::shared_ptr<ClassType>(Clone());
+            auto delegate = xmake_shared<ClassType>(*this);
             if (!delegate)
                 BAD_ALLOC();
 
             // Create a new message instance for sending to the destination thread.
-            // If using XALLOCATOR explicit operator new required. See xallocator.h.
-            std::shared_ptr<DelegateAsyncWaitMsg<Args...>> msg(new DelegateAsyncWaitMsg<Args...>(delegate, m_priority, std::forward<Args>(args)...));
+            auto msg = xmake_shared<DelegateAsyncWaitMsg<Args...>>(delegate, m_priority, std::forward<Args>(args)...);
             if (!msg)
                 BAD_ALLOC();
             msg->SetInvokerWaiting(true);
@@ -1536,12 +1581,27 @@ public:
     /// Get the asynchronous function return value
     /// @return The destination thread target function return value
     RetType GetRetVal() noexcept {
+        // Use pointer cast if exceptions are disabled OR if user requested Asserts-only mode
+#if !defined(__cpp_exceptions) || defined(DMQ_ASSERTS)
+        // Fast, non-throwing check suitable for Embedded/Real-time
+        auto* p = std::any_cast<RetType>(&m_retVal);
+        if (p) return *p;
+
+        // Optional: If you want to trap this error in debug mode
+#if defined(DMQ_ASSERTS)
+        ASSERT();
+#endif
+
+        return RetType();
+#else
+        // Standard C++ behavior with Exception Handling
         try {
             return std::any_cast<RetType>(m_retVal);
         }
         catch (const std::bad_any_cast&) {
-            return RetType();  // Return a default value if error
+            return RetType();
         }
+#endif
     }
 
     ///@brief Get the destination thread that the target function is invoked on.

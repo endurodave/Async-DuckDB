@@ -7,10 +7,11 @@
 #define NETWORK_ENGINE_H
 
 // Only define NetworkEngine if a compatible transport is selected
-#if defined(DMQ_TRANSPORT_ZEROMQ) || defined(DMQ_TRANSPORT_WIN32_UDP) || defined(DMQ_TRANSPORT_LINUX_UDP)
+#if defined(DMQ_TRANSPORT_ZEROMQ) || defined(DMQ_TRANSPORT_WIN32_UDP) || defined(DMQ_TRANSPORT_LINUX_UDP) || defined(DMQ_TRANSPORT_STM32_UART) || defined(DMQ_TRANSPORT_SERIAL_PORT)
 
 #include "predef/util/RemoteEndpoint.h"
 #include "predef/util/TransportMonitor.h"
+#include "predef/dispatcher/RemoteChannel.h"
 #include <map>
 #include <mutex>
 #include <atomic>
@@ -23,8 +24,22 @@
 #include "predef/transport/zeromq/ZeroMqTransport.h"
 #elif defined(DMQ_TRANSPORT_WIN32_UDP)
 #include "predef/transport/win32-udp/Win32UdpTransport.h"
+#include "predef/util/ReliableTransport.h"
+#include "predef/util/RetryMonitor.h"
 #elif defined(DMQ_TRANSPORT_LINUX_UDP)
 #include "predef/transport/linux-udp/LinuxUdpTransport.h"
+#include "predef/util/ReliableTransport.h"
+#include "predef/util/RetryMonitor.h"
+#elif defined(DMQ_TRANSPORT_STM32_UART)
+#include "predef/transport/stm32-uart/Stm32UartTransport.h"
+#include "predef/util/ReliableTransport.h"
+#include "predef/util/RetryMonitor.h"
+#elif defined(DMQ_TRANSPORT_SERIAL_PORT)
+#include "predef/transport/serial/SerialTransport.h"
+#include "predef/util/ReliableTransport.h"
+#include "predef/util/RetryMonitor.h"
+#else
+#error "Select a NetworkEngine transport"
 #endif
 
 /// @brief Base class for handling network transport, threading, and synchronization.
@@ -37,7 +52,7 @@
 /// * **Lifecycle Management:** Controls the startup and shutdown of transport sockets and receiver threads.
 /// * **Thread Synchronization:** Marshals all outgoing network calls to a dedicated network thread to ensure 
 ///   thread safety and prevent blocking the caller's UI or logic threads.
-/// * **Message Routing:** Maps incoming data (by ID) to specific `RemoteEndpoint` instances via `RegisterEndpoint`.
+/// * **Message Routing:** Maps incoming data (by ID) to specific `DelegateMemberRemote` instances via `RegisterEndpoint`.
 /// * **Reliability:** Integrates with `TransportMonitor` to handle Acknowledgments (ACKs) and retransmissions/timeouts.
 class NetworkEngine
 {
@@ -55,6 +70,12 @@ public:
 #elif defined(DMQ_TRANSPORT_WIN32_UDP) || defined(DMQ_TRANSPORT_LINUX_UDP)
     // UDP requires explicit IP and Port for sending and receiving
     int Initialize(const std::string& sendIp, int sendPort, const std::string& recvIp, int recvPort);
+#elif defined(DMQ_TRANSPORT_STM32_UART)
+    // Initialize with HAL Handle
+    int Initialize(UART_HandleTypeDef* huart);
+#elif defined(DMQ_TRANSPORT_SERIAL_PORT)
+    // Initialize with COM Port name and baud rate
+    int Initialize(const std::string& portName, int baudRate);
 #endif
 
     /// @brief Starts the network engine and its receiving thread.
@@ -78,9 +99,9 @@ public:
 
     /// @brief Registers a remote endpoint with the network engine.
     /// 
-    /// @details This function maps a unique `DelegateRemoteId` to a specific `RemoteEndpoint` 
-    /// instance (via the `IRemoteInvoker` interface). When the `NetworkEngine` receives 
-    /// data from the transport layer, it uses the message ID to look up the registered 
+    /// @details This function maps a unique `DelegateRemoteId` to a specific `DelegateMemberRemote`
+    /// instance (via the `IRemoteInvoker` interface). When the `NetworkEngine` receives
+    /// data from the transport layer, it uses the message ID to look up the registered
     /// endpoint in this map and invokes it to deserialize and handle the payload.
     /// 
     /// @param[in] id The unique identifier for the remote message type.
@@ -109,7 +130,7 @@ public:
     /// @param[in] args The arguments to forward to the remote function.
     /// @return `true` if the remote acknowledged the message; `false` on timeout or transport failure.
     template <class TClass, class RetType, class... Args>
-    bool RemoteInvokeWait(RemoteEndpoint<TClass, RetType(Args...)>& endpoint, Args&&... args)
+    bool RemoteInvokeWait(dmq::DelegateMemberRemote<TClass, RetType(Args...)>& endpoint, Args&&... args)
     {
         // 1. [Caller Thread] Check if we are on the Network Thread.
         if (Thread::GetCurrentThreadId() != m_thread.GetThreadId())
@@ -118,11 +139,11 @@ public:
             struct SyncState {
                 std::atomic<bool> success{ false };
                 bool complete = false;
-                std::mutex mtx;
-                std::condition_variable cv;
+                dmq::Mutex mtx;              // Generic Mutex
+                dmq::ConditionVariable cv;   // Generic CV
                 XALLOCATOR
             };
-            auto state = std::make_shared<SyncState>();
+            auto state = xmake_shared<SyncState>();
             dmq::DelegateRemoteId remoteId = endpoint.GetRemoteId();
 
             // 3. [Caller Thread] Define the callback that wakes us up later.
@@ -130,7 +151,7 @@ public:
                 [state, remoteId](dmq::DelegateRemoteId id, uint16_t seq, TransportMonitor::Status status) {
                 if (id == remoteId) {
                     {
-                        std::lock_guard<std::mutex> lock(state->mtx);
+                        std::lock_guard<dmq::Mutex> lock(state->mtx);
                         state->complete = true;
                         if (status == TransportMonitor::Status::SUCCESS)
                             state->success.store(true);
@@ -141,8 +162,7 @@ public:
                 };
 
             // 4. [Caller Thread] Register the callback.
-            auto delegate = dmq::MakeDelegate(statusCbFunc);
-            m_transportMonitor.SendStatusCb += delegate;
+            dmq::ScopedConnection conn = m_transportMonitor.OnSendStatus.Connect(dmq::MakeDelegate(statusCbFunc));
 
             // 5. [Caller Thread] Define the "Send" logic lambda.
             auto* epPtr = &endpoint;
@@ -159,17 +179,16 @@ public:
             if (retVal.has_value() && retVal.value() == true)
             {
                 // 8. [Caller Thread] BLOCK and Wait.
-                std::unique_lock<std::mutex> lock(state->mtx);
-                while (!state->complete) {
-                    if (state->cv.wait_for(lock, RECV_TIMEOUT) == std::cv_status::timeout) {
-                        state->complete = true; // Timeout occurred
-                    }
-                }
+                std::unique_lock<dmq::Mutex> lock(state->mtx);
+                // wait_for returns false if the predicate is still false after the timeout
+                state->cv.wait_for(lock, RECV_TIMEOUT, [&] {
+                    return state->complete;
+                    });
                 // 10. [Caller Thread] Wake up! The wait is over.
             }
 
             // 11. [Caller Thread] Cleanup and return result.
-            m_transportMonitor.SendStatusCb -= delegate;
+            // 'conn' goes out of scope here and automatically disconnects
             return state->success.load();
         }
         else
@@ -181,7 +200,76 @@ public:
         }
     }
 
+    /// @brief Overload of RemoteInvokeWait that accepts a RemoteChannel directly.
+    /// @details Equivalent to the DelegateMemberRemote overload; routes through the
+    /// channel's internal delegate. Prefer this when the endpoint is managed by a
+    /// RemoteChannel (i.e. configured via `channel.Bind()`).
+    template <class RetType, class... Args>
+    bool RemoteInvokeWait(dmq::RemoteChannel<RetType(Args...)>& channel, Args&&... args)
+    {
+        if (Thread::GetCurrentThreadId() != m_thread.GetThreadId())
+        {
+            struct SyncState {
+                std::atomic<bool> success{ false };
+                bool complete = false;
+                dmq::Mutex mtx;
+                dmq::ConditionVariable cv;
+                XALLOCATOR
+            };
+            auto state = xmake_shared<SyncState>();
+            dmq::DelegateRemoteId remoteId = channel.GetRemoteId();
+
+            std::function<void(dmq::DelegateRemoteId, uint16_t, TransportMonitor::Status)> statusCbFunc =
+                [state, remoteId](dmq::DelegateRemoteId id, uint16_t seq, TransportMonitor::Status status) {
+                if (id == remoteId) {
+                    {
+                        std::lock_guard<dmq::Mutex> lock(state->mtx);
+                        state->complete = true;
+                        if (status == TransportMonitor::Status::SUCCESS)
+                            state->success.store(true);
+                    }
+                    state->cv.notify_one();
+                }
+            };
+
+            dmq::ScopedConnection conn = m_transportMonitor.OnSendStatus.Connect(dmq::MakeDelegate(statusCbFunc));
+
+            auto* chPtr = &channel;
+            std::function<bool(Args...)> asyncCallFunc = [chPtr](Args... fwdArgs) -> bool {
+                (*chPtr)(fwdArgs...);
+                return (chPtr->GetError() == dmq::DelegateError::SUCCESS);
+            };
+
+            auto retVal = dmq::MakeDelegate(asyncCallFunc, m_thread, SEND_TIMEOUT)
+                .AsyncInvoke(std::forward<Args>(args)...);
+
+            if (retVal.has_value() && retVal.value() == true)
+            {
+                std::unique_lock<dmq::Mutex> lock(state->mtx);
+                state->cv.wait_for(lock, RECV_TIMEOUT, [&] { return state->complete; });
+            }
+
+            return state->success.load();
+        }
+        else
+        {
+            channel(std::forward<Args>(args)...);
+            return (channel.GetError() == dmq::DelegateError::SUCCESS);
+        }
+    }
+
 protected:
+    /// @brief Returns the send-side transport for use by RemoteChannel instances.
+    /// @details Derived classes can pass this to RemoteChannel constructors so each
+    /// channel owns its own Dispatcher while sharing the same physical transport.
+    ITransport& GetSendTransport() {
+#if defined(DMQ_TRANSPORT_ZEROMQ)
+        return m_sendTransport;
+#else
+        return m_reliableTransport;
+#endif
+    }
+
     Thread m_thread;
     Dispatcher m_dispatcher;
     TransportMonitor m_transportMonitor;
@@ -196,8 +284,9 @@ private:
     void InternalErrorHandler(dmq::DelegateRemoteId id, dmq::DelegateError error, dmq::DelegateErrorAux aux);
     void InternalStatusHandler(dmq::DelegateRemoteId id, uint16_t seq, TransportMonitor::Status status);
 
-    std::thread* m_recvThread = nullptr;
+    Thread m_recvThread;
     std::atomic<bool> m_recvThreadExit{ false };
+    bool m_recvThreadCreated = false;
     Timer m_timeoutTimer;
     dmq::ScopedConnection m_timeoutTimerConn;
 
@@ -205,15 +294,52 @@ private:
 #if defined(DMQ_TRANSPORT_ZEROMQ)
     ZeroMqTransport m_sendTransport;
     ZeroMqTransport m_recvTransport;
+
+    // ZeroMQ already has reliable communication
+
 #elif defined(DMQ_TRANSPORT_WIN32_UDP)
     UdpTransport m_sendTransport;
     UdpTransport m_recvTransport;
+
+    // Reliability Layers
+    RetryMonitor m_retryMonitor;
+    ReliableTransport m_reliableTransport;
+
 #elif defined(DMQ_TRANSPORT_LINUX_UDP)
     UdpTransport m_sendTransport;
     UdpTransport m_recvTransport;
+
+    // Reliability Layers
+    RetryMonitor m_retryMonitor;
+    ReliableTransport m_reliableTransport;
+
+#elif defined(DMQ_TRANSPORT_STM32_UART)
+    // Single Shared Transport Instance (Owns the buffers/state)
+    Stm32UartTransport m_transport;
+
+    // References (Aliases used by generic code)
+    Stm32UartTransport& m_sendTransport;
+    Stm32UartTransport& m_recvTransport;
+
+    // Reliability Layers
+    RetryMonitor m_retryMonitor;
+    ReliableTransport m_reliableTransport;
+
+#elif defined(DMQ_TRANSPORT_SERIAL_PORT)
+    // Single Shared Transport Instance
+    SerialTransport m_transport;
+
+    // References required by generic code
+    SerialTransport& m_sendTransport;
+    SerialTransport& m_recvTransport;
+
+    // Reliability Layers
+    RetryMonitor m_retryMonitor;
+    ReliableTransport m_reliableTransport;
 #endif
 
     std::map<dmq::DelegateRemoteId, dmq::IRemoteInvoker*> m_receiveIdMap;
+    dmq::ScopedConnection m_statusConn;
 
     static const std::chrono::milliseconds SEND_TIMEOUT;
     static const std::chrono::milliseconds RECV_TIMEOUT;

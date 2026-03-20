@@ -11,7 +11,7 @@
 namespace dmq {
 
 template <class R>
-struct UnicastDelegate; // Not defined
+class UnicastDelegate; // Not defined
 
 /// @brief A non-thread-safe delegate container storing one delegate. Void and  
 /// non-void return values supported. 
@@ -22,7 +22,7 @@ public:
     using DelegateType = Delegate<RetType(Args...)>;
 
     UnicastDelegate() = default;
-    ~UnicastDelegate() { Clear(); }
+    virtual ~UnicastDelegate() { Clear(); }
 
     /// @brief Copy constructor that creates a copy of the given instance.
     /// @details This constructor initializes a new object as a copy of the 
@@ -37,9 +37,19 @@ public:
         }
     }
 
-    /// @brief Move constructor that transfers ownership of resources.
+    /// Move constructor that transfers ownership of resources.
     /// @param[in] rhs The object to move from.
     UnicastDelegate(UnicastDelegate&& rhs) noexcept : m_delegate(std::move(rhs.m_delegate)) { }
+
+    /// Constructor to initialize from a Delegate (Copy)
+    UnicastDelegate(const DelegateType& d) {
+        *this = d;
+    }
+
+    /// Constructor to initialize from a Delegate (Move)
+    UnicastDelegate(DelegateType&& d) {
+        *this = std::move(d);
+    }
 
     /// Invoke the bound target.
     /// @param[in] args The arguments used when invoking the target function

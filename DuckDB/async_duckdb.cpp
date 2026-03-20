@@ -10,6 +10,8 @@
 #include <thread>
 #include <functional> 
 #include <iostream>
+#include <type_traits>
+#include <optional>
 
 using namespace dmq;
 
@@ -17,22 +19,27 @@ namespace async
 {
     // A private worker thread instance
     static Thread DuckThread("DuckDB Thread");
+    static IThread* CentralThread = &DuckThread;
+
+    const std::string PreparedStatement::m_empty_error = "";
 
     // --------------------------------------------------------------------------------
     // Core Logic: Dispatch to Worker Thread
     // --------------------------------------------------------------------------------
     void DispatchTask(std::function<void()> task)
     {
-        if (DuckThread.GetThreadId() == std::thread::id()) {
-            // If we are shutting down or not initialized, we can't dispatch.
-            // In a destructor, throwing is bad, so we log or ignore.
-            // For now, we assume init_worker() was called.
-            return;
-        }
-
-        auto delegate = dmq::MakeDelegate(task, DuckThread);
+        if (!CentralThread) return;
+        
+        auto delegate = dmq::MakeDelegate(task, *CentralThread);
         delegate.AsyncInvoke();
     }
+
+    // Helper trait to check if a type is a pointer-like object to QueryResult
+    template<typename T, typename = void>
+    struct is_query_result_ptr : std::false_type {};
+
+    template<typename T>
+    struct is_query_result_ptr<T, std::void_t<decltype(std::declval<T>().operator->()->HasError())>> : std::true_type {};
 
     // --------------------------------------------------------------------------------
     // Helper: RunAsync (Returns std::future immediately)
@@ -45,8 +52,6 @@ namespace async
         auto promise = std::make_shared<std::promise<RetType>>();
         auto future = promise->get_future();
 
-        // Lambda captures 'func' and 'args' by value (COPY). 
-        // Func must be copy-constructible to satisfy std::function requirements.
         auto task = [promise, func, args = std::make_tuple(std::forward<Args>(args)...)]() mutable {
             try {
                 if constexpr (std::is_void_v<RetType>) {
@@ -72,47 +77,82 @@ namespace async
     template <typename Func, typename... Args>
     auto RunSync(dmq::Duration timeout, Func func, Args&&... args)
     {
-        using RetType = decltype(func(std::forward<Args>(args)...));
+        using RetType = std::invoke_result_t<std::decay_t<Func>, std::decay_t<Args>...>;
 
-        // Optimization: If already on worker thread, run directly
-        if (DuckThread.GetThreadId() == std::this_thread::get_id()) {
+        // If we are already on the worker thread, just run it
+        if (CentralThread->IsCurrentThread()) {
             return std::invoke(func, std::forward<Args>(args)...);
         }
 
-        auto promise = std::make_shared<std::promise<RetType>>();
-        auto future = promise->get_future();
+        struct SyncState {
+            dmq::Semaphore sema;
+            std::exception_ptr ex;
+            typename std::conditional_t<std::is_void_v<RetType>, bool, std::optional<RetType>> result;
+        };
+        auto state = std::make_shared<SyncState>();
 
-        auto task = [promise, func, args = std::make_tuple(std::forward<Args>(args)...)]() mutable {
+        auto task = [state, func, args = std::make_tuple(std::forward<Args>(args)...)]() mutable {
             try {
                 if constexpr (std::is_void_v<RetType>) {
                     std::apply(func, std::move(args));
-                    promise->set_value();
                 }
                 else {
-                    promise->set_value(std::apply(func, std::move(args)));
+                    state->result = std::apply(func, std::move(args));
                 }
             }
             catch (...) {
-                promise->set_exception(std::current_exception());
+                state->ex = std::current_exception();
             }
+            state->sema.Signal();
             };
 
         DispatchTask(task);
 
-        if (future.wait_for(timeout) == std::future_status::timeout) {
+        if (!state->sema.Wait(timeout)) {
             throw std::runtime_error("DuckDB Operation Timed Out");
         }
-        return future.get();
+
+        if (state->ex) {
+            std::rethrow_exception(state->ex);
+        }
+        
+        if constexpr (!std::is_void_v<RetType>) {
+            auto res = std::move(*(state->result));
+            
+            // Check if RetType is some kind of smart pointer to QueryResult
+            if constexpr (is_query_result_ptr<RetType>::value) {
+                if (res && res->HasError()) {
+                    res->ThrowError();
+                }
+            }
+            return res;
+        }
     }
 
     // --------------------------------------------------------------------------------
-    // Implementation
+    // Initialization & Thread Management
     // --------------------------------------------------------------------------------
-    void init_worker() { DuckThread.CreateThread(); }
-    void shutdown_worker() { DuckThread.ExitThread(); }
-    Thread* get_worker_thread() { return &DuckThread; }
+    void init_worker(IThread* thread) { 
+        if (thread) {
+            CentralThread = thread;
+        } else {
+            DuckThread.CreateThread(); 
+            CentralThread = &DuckThread;
+        }
+    }
+    
+    void shutdown_worker() { 
+        if (CentralThread == &DuckThread) {
+            DuckThread.ExitThread(); 
+        }
+        CentralThread = nullptr;
+    }
+    
+    IThread* get_worker_thread() { return CentralThread; }
 
-    // --- Database ---
+    // --------------------------------------------------------------------------------
+    // Database Proxy
+    // --------------------------------------------------------------------------------
     Database::Database(const char* path, dmq::Duration timeout) {
         auto task = [this, p = (path ? std::string(path) : std::string())]() {
             const char* dbPath = p.empty() ? nullptr : p.c_str();
@@ -123,12 +163,101 @@ namespace async
 
     Database::~Database() {
         if (!m_db) return;
-        // m_db is shared_ptr, so capturing it by value is copyable. Safe for std::function.
-        auto task = [db = m_db]() { /* db destroyed here on worker */ };
+        auto task = [db = std::move(m_db)]() {};
         DispatchTask(task);
     }
 
-    // --- Connection ---
+    // --------------------------------------------------------------------------------
+    // PreparedStatement Proxy
+    // --------------------------------------------------------------------------------
+    PreparedStatement::~PreparedStatement() {
+        if (m_state) {
+            auto task = [state = std::move(m_state)]() {};
+            DispatchTask(task);
+        }
+    }
+
+    void PreparedStatement::BindValue(duckdb::idx_t index, duckdb::Value val) {
+        DispatchTask([state = m_state, index, v = std::move(val)]() {
+            if (state->stmt && state->stmt->success) {
+                if (index == 0) throw std::out_of_range("DuckDB Bind index starts at 1");
+                if (state->params.size() < index) {
+                    state->params.resize(index);
+                }
+                state->params[index - 1] = v;
+            }
+            });
+    }
+
+    std::unique_ptr<duckdb::QueryResult> PreparedStatement::Execute(dmq::Duration timeout) {
+        auto task = [state = m_state]() -> std::unique_ptr<duckdb::QueryResult> { 
+            return state->stmt->Execute(state->params); 
+        };
+        return RunSync(timeout, task);
+    }
+
+    std::future<std::unique_ptr<duckdb::QueryResult>> PreparedStatement::ExecuteFuture() {
+        auto task = [state = m_state]() -> std::unique_ptr<duckdb::QueryResult> {
+            return state->stmt->Execute(state->params);
+            };
+        return RunAsync(task);
+    }
+
+    duckdb::idx_t PreparedStatement::nParam() {
+        return RunSync(MAX_WAIT, [state = m_state]() {
+            if (!state->stmt || !state->stmt->success) return (duckdb::idx_t)0;
+            return (duckdb::idx_t)state->stmt->named_param_map.size();
+            });
+    }
+
+    // --------------------------------------------------------------------------------
+    // Appender Proxy
+    // --------------------------------------------------------------------------------
+    Appender::~Appender() {
+        if (m_appender) {
+            auto task = [app = std::move(m_appender)]() {
+                app->Flush();
+                app->Close();
+                };
+            DispatchTask(task);
+        }
+    }
+
+    void Appender::BeginRow() {
+        if (!m_appender) return;
+        RunSync(MAX_WAIT, [app = m_appender]() { app->BeginRow(); });
+    }
+
+    void Appender::EndRow() {
+        if (!m_appender) return;
+        RunSync(MAX_WAIT, [app = m_appender]() { app->EndRow(); });
+    }
+
+    void Appender::Append(const char* val) {
+        AppendValue(duckdb::Value(val));
+    }
+
+    void Appender::AppendValue(duckdb::Value val) {
+        RunSync(MAX_WAIT, [a = m_appender, v = std::move(val)]() {
+            if (a) {
+                a->Append(v);
+            }
+        });
+    }
+
+    void Appender::Flush() {
+        if (!m_appender) return;
+        RunSync(MAX_WAIT, [app = m_appender]() { app->Flush(); });
+    }
+
+    void Appender::Close() {
+        if (!m_appender) return;
+        RunSync(MAX_WAIT, [app = m_appender]() { app->Close(); });
+    }
+
+    // --------------------------------------------------------------------------------
+    // Connection Proxy
+    // --------------------------------------------------------------------------------
     Connection::Connection(Database& db, dmq::Duration timeout) {
         auto task = [this, &db]() {
             m_conn = std::make_unique<duckdb::Connection>(*db.unsafe_raw());
@@ -138,32 +267,55 @@ namespace async
 
     Connection::~Connection() {
         if (!m_conn) return;
-
-        // [FIX] Convert unique_ptr to shared_ptr so the lambda is Copy Constructible.
-        // std::function requires the lambda to be copyable.
-        // std::unique_ptr is move-only, which breaks std::function.
-        std::shared_ptr<duckdb::Connection> shared_conn = std::move(m_conn);
-
-        auto task = [shared_conn]() {
-            // shared_conn goes out of scope here, destroying the connection on the worker thread.
-            };
-
+        auto task = [conn = std::move(m_conn)]() {};
         DispatchTask(task);
     }
 
-    // Sync Query
     std::unique_ptr<duckdb::QueryResult> Connection::Query(const std::string& sql, dmq::Duration timeout) {
-        auto task = [this, sql]() { return m_conn->Query(sql); };
+        auto task = [this, sql]() -> std::unique_ptr<duckdb::QueryResult> { 
+            return m_conn->Query(sql); 
+        };
         return RunSync(timeout, task);
     }
 
-    // Async Future Query
     std::future<std::unique_ptr<duckdb::QueryResult>> Connection::QueryFuture(const std::string& sql) {
-        // Explicit return type forces upcast
         auto task = [this, sql]() -> std::unique_ptr<duckdb::QueryResult> {
             return m_conn->Query(sql);
             };
         return RunAsync(task);
+    }
+
+    std::unique_ptr<PreparedStatement> Connection::Prepare(const std::string& sql, dmq::Duration timeout) {
+        auto task = [this, sql]() -> std::unique_ptr<PreparedStatement> {
+            auto raw_stmt = m_conn->Prepare(sql);
+            if (!raw_stmt->success) {
+                raw_stmt->error.Throw();
+            }
+            std::shared_ptr<duckdb::PreparedStatement> shared_stmt = std::move(raw_stmt);
+            return std::make_unique<PreparedStatement>(shared_stmt);
+            };
+        return RunSync(timeout, task);
+    }
+
+    std::unique_ptr<Appender> Connection::CreateAppender(const std::string& table, dmq::Duration timeout) {
+        auto task = [this, table]() -> std::unique_ptr<Appender> {
+            auto raw_app = std::make_unique<duckdb::Appender>(*m_conn, table);
+            std::shared_ptr<duckdb::Appender> shared_app = std::move(raw_app);
+            return std::make_unique<Appender>(shared_app);
+            };
+        return RunSync(timeout, task);
+    }
+
+    void Connection::BeginTransaction() {
+        RunSync(MAX_WAIT, [this]() { m_conn->BeginTransaction(); });
+    }
+
+    void Connection::Commit() {
+        RunSync(MAX_WAIT, [this]() { m_conn->Commit(); });
+    }
+
+    void Connection::Rollback() {
+        RunSync(MAX_WAIT, [this]() { m_conn->Rollback(); });
     }
 
 } // namespace async

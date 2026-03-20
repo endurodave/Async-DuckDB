@@ -102,7 +102,7 @@ private:
 };
 
 template <class R>
-struct DelegateFreeAsync; // Not defined
+class DelegateFreeAsync; // Not defined
 
 /// @brief `DelegateFreeAsync<>` class asynchronously invokes a free target function.
 /// @tparam RetType The return type of the bound delegate function.
@@ -267,13 +267,12 @@ public:
         }
         else {
             // Create a clone instance of this delegate 
-            auto delegate = std::shared_ptr<ClassType>(Clone());
+            auto delegate = xmake_shared<ClassType>(*this);
             if (!delegate)
                 BAD_ALLOC();
 
             // Create a new message instance for sending to the destination thread
-            // If using XALLOCATOR explicit operator new required. See xallocator.h.
-            std::shared_ptr<DelegateAsyncMsg<Args...>> msg(new DelegateAsyncMsg<Args...>(delegate, m_priority, std::forward<Args>(args)...));
+            auto msg = xmake_shared<DelegateAsyncMsg<Args...>>(delegate, m_priority, std::forward<Args>(args)...);
             if (!msg)
                 BAD_ALLOC();
 
@@ -351,7 +350,7 @@ private:
 };
 
 template <class C, class R>
-struct DelegateMemberAsync; // Not defined
+class DelegateMemberAsync; // Not defined
 
 /// @brief `DelegateMemberAsync<>` class asynchronously invokes a class member target function.
 /// @tparam TClass The class type that contains the member function.
@@ -581,13 +580,12 @@ public:
         }
         else {
             // Create a clone instance of this delegate 
-            auto delegate = std::shared_ptr<ClassType>(Clone());
+            auto delegate = xmake_shared<ClassType>(*this);
             if (!delegate)
                 BAD_ALLOC();
 
             // Create a new message instance for sending to the destination thread
-            // If using XALLOCATOR explicit operator new required. See xallocator.h.
-            std::shared_ptr<DelegateAsyncMsg<Args...>> msg(new DelegateAsyncMsg<Args...>(delegate, m_priority, std::forward<Args>(args)...));
+            auto msg = xmake_shared<DelegateAsyncMsg<Args...>>(delegate, m_priority, std::forward<Args>(args)...);
             if (!msg)
                 BAD_ALLOC();
 
@@ -665,7 +663,7 @@ private:
 };
 
 template <class C, class R>
-struct DelegateMemberAsyncSp; // Not defined
+class DelegateMemberAsyncSp; // Not defined
 
 /// @brief `DelegateMemberAsyncSp<>` class asynchronously invokes a class member target function
 /// using a weak pointer (safe from use-after-free).
@@ -824,13 +822,12 @@ public:
         }
         else {
             // Create a clone instance of this delegate 
-            auto delegate = std::shared_ptr<ClassType>(Clone());
+            auto delegate = xmake_shared<ClassType>(*this);
             if (!delegate)
                 BAD_ALLOC();
 
             // Create a new message instance for sending to the destination thread
-            // If using XALLOCATOR explicit operator new required. See xallocator.h.
-            std::shared_ptr<DelegateAsyncMsg<Args...>> msg(new DelegateAsyncMsg<Args...>(delegate, m_priority, std::forward<Args>(args)...));
+            auto msg = xmake_shared<DelegateAsyncMsg<Args...>>(delegate, m_priority, std::forward<Args>(args)...);
             if (!msg)
                 BAD_ALLOC();
 
@@ -908,7 +905,7 @@ private:
 };
 
 template <class R>
-struct DelegateFunctionAsync; // Not defined
+class DelegateFunctionAsync; // Not defined
 
 /// @brief `DelegateFunctionAsync<>` class asynchronously invokes a `std::function` target function.
 /// @details Caution when binding to a `std::function` using this class. `std::function` cannot be 
@@ -1079,13 +1076,12 @@ public:
         }
         else {
             // Create a clone instance of this delegate 
-            auto delegate = std::shared_ptr<ClassType>(Clone());
+            auto delegate = xmake_shared<ClassType>(*this);
             if (!delegate)
                 BAD_ALLOC();
 
             // Create a new message instance for sending to the destination thread
-            // If using XALLOCATOR explicit operator new required. See xallocator.h.
-            std::shared_ptr<DelegateAsyncMsg<Args...>> msg(new DelegateAsyncMsg<Args...>(delegate, m_priority, std::forward<Args>(args)...));
+            auto msg = xmake_shared<DelegateAsyncMsg<Args...>>(delegate, m_priority, std::forward<Args>(args)...);
             if (!msg)
                 BAD_ALLOC();
 

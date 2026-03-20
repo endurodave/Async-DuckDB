@@ -17,6 +17,7 @@ DuckDB/*.lib
 DuckDB/*.dll
 DuckDB/*.exp
 DuckDB/duckdb.h*
+*.db
 
 # Build results
 Build

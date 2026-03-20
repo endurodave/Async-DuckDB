@@ -37,7 +37,6 @@ file(GLOB SOURCES
     "*.h" 
     "DuckDB/async_duckdb.cpp" 
     "DuckDB/async_duckdb.hpp"
-    # "DuckDB/duckdb.cpp" <-- Do NOT compile this huge file anymore
 )
 
 list(APPEND SOURCES ${DMQ_PREDEF_SOURCES})
@@ -51,12 +50,16 @@ source_group("DuckDB Files" FILES "DuckDB/async_duckdb.cpp" "DuckDB/async_duckdb
 include_directories( 
     ${DMQ_ROOT_DIR}
     DuckDB
+    UnitTest
 )
 
 # ------------------------------------------------------------------------------
 # 5. Build Target
 # ------------------------------------------------------------------------------
 add_executable(Async-DuckDBApp ${SOURCES} ${DMQ_LIB_SOURCES})
+
+# Add subdirectories to build
+add_subdirectory(UnitTest)
 
 # ------------------------------------------------------------------------------
 # 6. Linking
@@ -70,6 +73,7 @@ target_link_libraries(Async-DuckDBApp PRIVATE
     rstrtmgr
     bcrypt
     winmm
+    UnitTestLib
 )
 
 # ------------------------------------------------------------------------------
@@ -88,6 +92,7 @@ add_custom_command(TARGET Async-DuckDBApp POST_BUILD
 if(MSVC)
     target_compile_options(Async-DuckDBApp PRIVATE
         /MP         # Multi-processor compilation
-        /wd4005     # Suppress macro redefinition warnings (still needed for Windows headers)
+        /wd4005     # Suppress macro redefinition warnings
+        /wd4146     # Suppress 'unary minus applied to unsigned' (DuckDB header warning)
     )
 endif()

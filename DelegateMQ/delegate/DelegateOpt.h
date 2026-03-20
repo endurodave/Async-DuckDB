@@ -7,10 +7,29 @@
 #include <chrono>
 #include <mutex>
 
-#if defined(DMQ_THREAD_FREERTOS)
+// RTTI Detection Check
+#if !defined(__cpp_rtti) && !defined(__GXX_RTTI) && !defined(_CPPRTTI)
+    #error "RTTI compiler option is disabled but required by the DelegateMQ library."
+#endif
+
+#if defined(DMQ_THREAD_STDLIB) || defined(DMQ_THREAD_WIN32) || defined(DMQ_THREAD_QT)
+    // Windows / Linux / macOS / Qt (Standard Library)
+    #include <condition_variable>
+#elif defined(DMQ_THREAD_FREERTOS)
     #include "predef/util/FreeRTOSClock.h"
     #include "predef/util/FreeRTOSMutex.h"
-#elif defined(DMQ_THREAD_NONE)
+    #include "predef/util/FreeRTOSConditionVariable.h"
+#elif defined(DMQ_THREAD_THREADX)
+    #include "predef/util/ThreadXClock.h"
+    #include "predef/util/ThreadXMutex.h"
+    #include "predef/util/ThreadXConditionVariable.h"
+#elif defined(DMQ_THREAD_ZEPHYR)
+    #include "predef/util/ZephyrClock.h"
+    #include "predef/util/ZephyrMutex.h"
+#elif defined(DMQ_THREAD_CMSIS_RTOS2)
+    #include "predef/util/CmsisRtos2Clock.h"
+    #include "predef/util/CmsisRtos2Mutex.h"
+#else
     #include "predef/util/BareMetalClock.h"
 #endif
 
@@ -19,17 +38,28 @@ namespace dmq
     // @TODO: Change aliases to switch clock type globally if necessary
 
     // --- CLOCK SELECTION ---
-#if defined(DMQ_THREAD_FREERTOS)
+#if defined(DMQ_THREAD_STDLIB) || defined(DMQ_THREAD_WIN32) || defined(DMQ_THREAD_QT)
+    // Windows / Linux / macOS / Qt
+    using Clock = std::chrono::steady_clock;
+
+#elif defined(DMQ_THREAD_FREERTOS)
     // Use the custom FreeRTOS wrapper
     using Clock = dmq::FreeRTOSClock;
 
-#elif defined(DMQ_THREAD_NONE)
-    // Assuming implemented the 'g_ticks' variable
-    using Clock = dmq::BareMetalClock;
+#elif defined(DMQ_THREAD_THREADX)
+    // Use the custom ThreadX wrapper
+    using Clock = dmq::ThreadXClock;
+
+#elif defined(DMQ_THREAD_ZEPHYR)
+    // Use the custom Zephyr wrapper
+    using Clock = dmq::ZephyrClock;
+
+#elif defined(DMQ_THREAD_CMSIS_RTOS2)
+    using Clock = dmq::CmsisRtos2Clock;
 
 #else
-    // Windows / Linux / macOS (Standard)
-    using Clock = std::chrono::steady_clock;
+    // Assuming implemented the 'g_ticks' variable
+    using Clock = dmq::BareMetalClock;
 #endif
 
     // --- GENERIC TYPES ---
@@ -38,12 +68,34 @@ namespace dmq
     using TimePoint = typename Clock::time_point;
 
     // --- MUTEX / LOCK SELECTION ---
-#if defined(DMQ_THREAD_FREERTOS)
+#if defined(DMQ_THREAD_STDLIB) || defined(DMQ_THREAD_WIN32) || defined(DMQ_THREAD_QT)
+    // Windows / Linux / macOS / Qt
+    using Mutex = std::mutex;
+    using RecursiveMutex = std::recursive_mutex;
+    using ConditionVariable = std::condition_variable;
+
+#elif defined(DMQ_THREAD_FREERTOS)
     // Use the custom FreeRTOS wrapper
     using Mutex = dmq::FreeRTOSMutex;
     using RecursiveMutex = dmq::FreeRTOSRecursiveMutex;
+    using ConditionVariable = dmq::FreeRTOSConditionVariable;
 
-#elif defined(DMQ_THREAD_NONE)
+#elif defined(DMQ_THREAD_THREADX)
+    // Use the custom ThreadX wrapper
+    using Mutex = dmq::ThreadXMutex;
+    using RecursiveMutex = dmq::ThreadXRecursiveMutex;
+    using ConditionVariable = dmq::ThreadXConditionVariable;
+
+#elif defined(DMQ_THREAD_ZEPHYR)
+    // Use the custom Zephyr wrapper
+    using Mutex = dmq::ZephyrMutex;
+    using RecursiveMutex = dmq::ZephyrRecursiveMutex;
+
+#elif defined(DMQ_THREAD_CMSIS_RTOS2)
+    using Mutex = dmq::CmsisRtos2Mutex;
+    using RecursiveMutex = dmq::CmsisRtos2RecursiveMutex;
+
+#else
     // Bare metal has no threads, so no locking is required.
     // We define a dummy "No-Op" mutex.
     struct NullMutex {
@@ -52,21 +104,25 @@ namespace dmq
     };
     using Mutex = NullMutex;
     using RecursiveMutex = NullMutex;
-
-#else
-    // Windows / Linux / macOS
-    using Mutex = std::mutex;
-    using RecursiveMutex = std::recursive_mutex;
 #endif
 }
 
+// Detect if exceptions are disabled at the compiler level
+#if !defined(__cpp_exceptions)
+    #ifndef DMQ_ASSERTS
+        #define DMQ_ASSERTS  // Force asserts if exceptions are off
+    #endif
+#endif
+
 // @TODO: Select the desired software fault handling (see Predef.cmake).
 #ifdef DMQ_ASSERTS
+    #include "predef/util/Fault.h"
     #include <cassert>
     // Use assert error handling. Change assert to a different error 
     // handler as required by the target application.
     #define BAD_ALLOC() assert(false && "Memory allocation failed!")
 #else
+    #include "predef/util/Fault.h"
     #include <new>
     // Use exception error handling
     #define BAD_ALLOC() throw std::bad_alloc()
@@ -79,12 +135,17 @@ namespace dmq
 // See master CMakeLists.txt for info on enabling the fixed-block allocator.
 #ifdef DMQ_ALLOCATOR
     // Use stl_allocator fixed-block allocator for dynamic storage allocation
+    #include "predef/allocator/xstring.h"
     #include "predef/allocator/xlist.h"
     #include "predef/allocator/xsstream.h"
     #include "predef/allocator/stl_allocator.h"
+    #include "predef/allocator/xnew.h"
 #else
+    #include <string>
     #include <list>
     #include <sstream>
+    #include <memory>
+    #include <utility>
 
     // Not using xallocator; define as nothing
     #undef XALLOCATOR
@@ -100,6 +161,27 @@ namespace dmq
 
     typedef std::basic_ostringstream<char, std::char_traits<char>> xostringstream;
     typedef std::basic_stringstream<char, std::char_traits<char>> xstringstream;
+
+    typedef std::string xstring;
+    typedef std::wstring xwstring;
+
+    // Fallback xmake_shared — uses std::make_shared when fixed-block allocator is disabled
+    template <typename T, typename... Args>
+    inline std::shared_ptr<T> xmake_shared(Args&&... args)
+    {
+        return std::make_shared<T>(std::forward<Args>(args)...);
+    }
+
+    // Fallback xnew/xdelete — use standard new/delete when fixed-block allocator is disabled
+    template<typename T, typename... Args>
+    inline T* xnew(Args&&... args) {
+        return new(std::nothrow) T(std::forward<Args>(args)...);
+    }
+
+    template<typename T>
+    inline void xdelete(T* p) {
+        delete p;
+    }
 #endif
 
 // @TODO: Select the desired logging (see Predef.cmake).
@@ -115,4 +197,4 @@ namespace dmq
     #define LOG_ERROR(...)   do {} while(0)
 #endif
 
-#endif
+#endif // _DELEGATE_OPT_H

@@ -131,7 +131,7 @@ private:
 };
 
 template <class R>
-struct DelegateFreeRemote; // Not defined
+class DelegateFreeRemote; // Not defined
 
 /// @brief `DelegateFreeRemote<>` class asynchronously invokes a free target function.
 /// @tparam RetType The return type of the bound delegate function.
@@ -143,6 +143,7 @@ public:
     typedef RetType(*FreeFunc)(Args...);
     using ClassType = DelegateFreeRemote<RetType(Args...)>;
     using BaseType = DelegateFree<RetType(Args...)>;
+    using BaseType::operator=;
 
     /// @brief Constructor to create a class instance. Typically called by sender. 
     /// @param[in] id The remote delegate identifier.
@@ -168,9 +169,11 @@ public:
 
     /// @brief Move constructor that transfers ownership of resources.
     /// @param[in] rhs The object to move from.
-    DelegateFreeRemote(ClassType&& rhs) noexcept : 
-        BaseType(std::move(rhs)), m_id(rhs.m_id) {
+    DelegateFreeRemote(ClassType&& rhs) noexcept :
+        BaseType(std::move(rhs)), m_id(rhs.m_id),
+        m_dispatcher(rhs.m_dispatcher), m_serializer(rhs.m_serializer), m_stream(rhs.m_stream) {
         rhs.Clear();
+        rhs.m_dispatcher = nullptr; rhs.m_serializer = nullptr; rhs.m_stream = nullptr;
     }
 
     DelegateFreeRemote() = default;
@@ -303,13 +306,20 @@ public:
         }
         else {
             if (m_serializer && m_stream) {
+#if !defined(__cpp_exceptions) || defined(DMQ_ASSERTS)
+                // Serialize all target function arguments into a stream
+                m_serializer->Write(*m_stream, std::forward<Args>(args)...);
+                RaiseSuccess(m_id);
+#else
                 try {
                     // Serialize all target function arguments into a stream
                     m_serializer->Write(*m_stream, std::forward<Args>(args)...);
                     RaiseSuccess(m_id);
-                } catch (std::exception&) {
+                }
+                catch (std::exception&) {
                     RaiseError(m_id, DelegateError::ERR_SERIALIZE);
                 }
+#endif
 
                 if (!m_stream->good()) {
                     RaiseError(m_id, DelegateError::ERR_STREAM_NOT_GOOD);
@@ -317,14 +327,22 @@ public:
                 else {
                     // Dispatch delegate invocation to the remote destination
                     if (m_dispatcher) {
+#if !defined(__cpp_exceptions) || defined(DMQ_ASSERTS)
+                        int error = m_dispatcher->Dispatch(*m_stream, m_id);
+                        if (error)
+                            RaiseError(m_id, DelegateError::ERR_DISPATCH, error);
+#else
                         try {
                             int error = m_dispatcher->Dispatch(*m_stream, m_id);
                             if (error)
                                 RaiseError(m_id, DelegateError::ERR_DISPATCH, error);
-                        } catch (std::exception&) {
+                        }
+                        catch (std::exception&) {
                             RaiseError(m_id, DelegateError::ERR_DISPATCH);
                         }
-                    } else {
+#endif
+                    }
+                    else {
                         RaiseError(m_id, DelegateError::ERR_NO_DISPATCHER);
                     }
                 }
@@ -377,6 +395,32 @@ public:
         // Invoke the delegate function synchronously
         m_sync = true;
 
+#if !defined(__cpp_exceptions) || defined(DMQ_ASSERTS)
+        if constexpr (ArgCnt::value == 0) {
+            BaseType::operator()();
+        }
+        else {
+            // 1. Create a tuple of RemoteArg<T> to hold the temporary storage
+            std::tuple<RemoteArg<Args>...> remoteArgs;
+
+            // 2. Use std::apply to unpack the tuple elements
+            std::apply([this, &is](auto&... rArgs) {
+
+                // 3. Deserialize: Expand the pack to call Read(is, arg1, arg2...)
+                // rArgs.Get() returns the reference/pointer to the internal storage
+                m_serializer->Read(is, rArgs.Get()...);
+
+                if (!is.bad() && !is.fail()) {
+                    // 4. Invoke: Expand the pack to call operator()(arg1, arg2...)
+                    this->operator()(rArgs.Get()...);
+                }
+                else {
+                    this->RaiseError(m_id, DelegateError::ERR_DESERIALIZE);
+                }
+
+                }, remoteArgs);
+        }
+#else
         try {
             if constexpr (ArgCnt::value == 0) {
                 BaseType::operator()();
@@ -402,10 +446,11 @@ public:
 
                     }, remoteArgs);
             }
-        } 
+        }
         catch (std::exception&) {
             RaiseError(m_id, DelegateError::ERR_DESERIALIZE_EXCEPTION);
         }
+#endif
 
         return true;
     }
@@ -472,8 +517,13 @@ private:
         m_error = error;
         if (m_errorHandler) {
             m_errorHandler(id, error, auxCode);
-        } else {
+        }
+        else {
+#if !defined(__cpp_exceptions) || defined(DMQ_ASSERTS)
+            // No throw
+#else
             throw std::runtime_error("Delegate remote error.");
+#endif
         }
     }
 
@@ -509,7 +559,7 @@ private:
 };
 
 template <class C, class R>
-struct DelegateMemberRemote; // Not defined
+class DelegateMemberRemote; // Not defined
 
 /// @brief `DelegateMemberRemote<>` class asynchronously invokes a class member target function.
 /// @tparam TClass The class type that contains the member function.
@@ -525,6 +575,7 @@ public:
     typedef RetType(TClass::* ConstMemberFunc)(Args...) const;
     using ClassType = DelegateMemberRemote<TClass, RetType(Args...)>;
     using BaseType = DelegateMember<TClass, RetType(Args...)>;
+    using BaseType::operator=;
 
     /// @brief Constructor to create a class instance. Typically called by sender. 
     /// @param[in] id The remote delegate identifier.
@@ -575,8 +626,10 @@ public:
     /// @brief Move constructor that transfers ownership of resources.
     /// @param[in] rhs The object to move from.
     DelegateMemberRemote(ClassType&& rhs) noexcept :
-        BaseType(std::move(rhs)), m_id(rhs.m_id) {
+        BaseType(std::move(rhs)), m_id(rhs.m_id),
+        m_dispatcher(rhs.m_dispatcher), m_serializer(rhs.m_serializer), m_stream(rhs.m_stream) {
         rhs.Clear();
+        rhs.m_dispatcher = nullptr; rhs.m_serializer = nullptr; rhs.m_stream = nullptr;
     }
 
     DelegateMemberRemote() = default;
@@ -746,13 +799,20 @@ public:
         }
         else {
             if (m_serializer && m_stream) {
+#if !defined(__cpp_exceptions) || defined(DMQ_ASSERTS)
+                // Serialize all target function arguments into a stream
+                m_serializer->Write(*m_stream, std::forward<Args>(args)...);
+                RaiseSuccess(m_id);
+#else
                 try {
                     // Serialize all target function arguments into a stream
                     m_serializer->Write(*m_stream, std::forward<Args>(args)...);
                     RaiseSuccess(m_id);
-                } catch (std::exception&) {
+                }
+                catch (std::exception&) {
                     RaiseError(m_id, DelegateError::ERR_SERIALIZE);
                 }
+#endif
 
                 if (!m_stream->good()) {
                     RaiseError(m_id, DelegateError::ERR_STREAM_NOT_GOOD);
@@ -760,14 +820,22 @@ public:
                 else {
                     // Dispatch delegate invocation to the remote destination
                     if (m_dispatcher) {
+#if !defined(__cpp_exceptions) || defined(DMQ_ASSERTS)
+                        int error = m_dispatcher->Dispatch(*m_stream, m_id);
+                        if (error)
+                            RaiseError(m_id, DelegateError::ERR_DISPATCH, error);
+#else
                         try {
                             int error = m_dispatcher->Dispatch(*m_stream, m_id);
                             if (error)
                                 RaiseError(m_id, DelegateError::ERR_DISPATCH, error);
-                        } catch (std::exception&) {
+                        }
+                        catch (std::exception&) {
                             RaiseError(m_id, DelegateError::ERR_DISPATCH);
                         }
-                    } else {
+#endif
+                    }
+                    else {
                         RaiseError(m_id, DelegateError::ERR_NO_DISPATCHER);
                     }
                 }
@@ -820,6 +888,32 @@ public:
         // Invoke the delegate function synchronously
         m_sync = true;
 
+#if !defined(__cpp_exceptions) || defined(DMQ_ASSERTS)
+        if constexpr (ArgCnt::value == 0) {
+            BaseType::operator()();
+        }
+        else {
+            // 1. Create a tuple of RemoteArg<T> to hold the temporary storage
+            std::tuple<RemoteArg<Args>...> remoteArgs;
+
+            // 2. Use std::apply to unpack the tuple elements
+            std::apply([this, &is](auto&... rArgs) {
+
+                // 3. Deserialize: Expand the pack to call Read(is, arg1, arg2...)
+                // rArgs.Get() returns the reference/pointer to the internal storage
+                m_serializer->Read(is, rArgs.Get()...);
+
+                if (!is.bad() && !is.fail()) {
+                    // 4. Invoke: Expand the pack to call operator()(arg1, arg2...)
+                    this->operator()(rArgs.Get()...);
+                }
+                else {
+                    this->RaiseError(m_id, DelegateError::ERR_DESERIALIZE);
+                }
+
+                }, remoteArgs);
+        }
+#else
         try {
             if constexpr (ArgCnt::value == 0) {
                 BaseType::operator()();
@@ -845,10 +939,11 @@ public:
 
                     }, remoteArgs);
             }
-        } 
+        }
         catch (std::exception&) {
             RaiseError(m_id, DelegateError::ERR_DESERIALIZE_EXCEPTION);
         }
+#endif
 
         return true;
     }
@@ -915,8 +1010,13 @@ private:
         m_error = error;
         if (m_errorHandler) {
             m_errorHandler(id, error, auxCode);
-        } else {
+        }
+        else {
+#if !defined(__cpp_exceptions) || defined(DMQ_ASSERTS)
+            // No throw
+#else
             throw std::runtime_error("Delegate remote error.");
+#endif
         }
     }
 
@@ -952,7 +1052,7 @@ private:
 };
 
 template <class R>
-struct DelegateFunctionRemote; // Not defined
+class DelegateFunctionRemote; // Not defined
 
 /// @brief `DelegateFunctionRemote<>` class asynchronously invokes a `std::function` target function.
 /// @details Caution when binding to a `std::function` using this class. `std::function` cannot be 
@@ -969,6 +1069,7 @@ public:
     using FunctionType = std::function<RetType(Args...)>;
     using ClassType = DelegateFunctionRemote<RetType(Args...)>;
     using BaseType = DelegateFunction<RetType(Args...)>;
+    using BaseType::operator=;
 
     /// @brief Constructor to create a class instance. Typically called by sender. 
     /// @param[in] id The remote delegate identifier.
@@ -995,8 +1096,10 @@ public:
     /// @brief Move constructor that transfers ownership of resources.
     /// @param[in] rhs The object to move from.
     DelegateFunctionRemote(ClassType&& rhs) noexcept :
-        BaseType(std::move(rhs)), m_id(rhs.m_id) {
+        BaseType(std::move(rhs)), m_id(rhs.m_id),
+        m_dispatcher(rhs.m_dispatcher), m_serializer(rhs.m_serializer), m_stream(rhs.m_stream) {
         rhs.Clear();
+        rhs.m_dispatcher = nullptr; rhs.m_serializer = nullptr; rhs.m_stream = nullptr;
     }
 
     DelegateFunctionRemote() = default;
@@ -1129,13 +1232,20 @@ public:
         }
         else {
             if (m_serializer && m_stream) {
+#if !defined(__cpp_exceptions) || defined(DMQ_ASSERTS)
+                // Serialize all target function arguments into a stream
+                m_serializer->Write(*m_stream, std::forward<Args>(args)...);
+                RaiseSuccess(m_id);
+#else
                 try {
                     // Serialize all target function arguments into a stream
                     m_serializer->Write(*m_stream, std::forward<Args>(args)...);
                     RaiseSuccess(m_id);
-                } catch (std::exception&) {
+                }
+                catch (std::exception&) {
                     RaiseError(m_id, DelegateError::ERR_SERIALIZE);
                 }
+#endif
 
                 if (!m_stream->good()) {
                     RaiseError(m_id, DelegateError::ERR_STREAM_NOT_GOOD);
@@ -1143,14 +1253,22 @@ public:
                 else {
                     // Dispatch delegate invocation to the remote destination
                     if (m_dispatcher) {
+#if !defined(__cpp_exceptions) || defined(DMQ_ASSERTS)
+                        int error = m_dispatcher->Dispatch(*m_stream, m_id);
+                        if (error)
+                            RaiseError(m_id, DelegateError::ERR_DISPATCH, error);
+#else
                         try {
                             int error = m_dispatcher->Dispatch(*m_stream, m_id);
                             if (error)
                                 RaiseError(m_id, DelegateError::ERR_DISPATCH, error);
-                        } catch (std::exception&) {
+                        }
+                        catch (std::exception&) {
                             RaiseError(m_id, DelegateError::ERR_DISPATCH);
                         }
-                    } else {
+#endif
+                    }
+                    else {
                         RaiseError(m_id, DelegateError::ERR_NO_DISPATCHER);
                     }
                 }
@@ -1203,6 +1321,32 @@ public:
         // Invoke the delegate function synchronously
         m_sync = true;
 
+#if !defined(__cpp_exceptions) || defined(DMQ_ASSERTS)
+        if constexpr (ArgCnt::value == 0) {
+            BaseType::operator()();
+        }
+        else {
+            // 1. Create a tuple of RemoteArg<T> to hold the temporary storage
+            std::tuple<RemoteArg<Args>...> remoteArgs;
+
+            // 2. Use std::apply to unpack the tuple elements
+            std::apply([this, &is](auto&... rArgs) {
+
+                // 3. Deserialize: Expand the pack to call Read(is, arg1, arg2...)
+                // rArgs.Get() returns the reference/pointer to the internal storage
+                m_serializer->Read(is, rArgs.Get()...);
+
+                if (!is.bad() && !is.fail()) {
+                    // 4. Invoke: Expand the pack to call operator()(arg1, arg2...)
+                    this->operator()(rArgs.Get()...);
+                }
+                else {
+                    this->RaiseError(m_id, DelegateError::ERR_DESERIALIZE);
+                }
+
+                }, remoteArgs);
+        }
+#else
         try {
             if constexpr (ArgCnt::value == 0) {
                 BaseType::operator()();
@@ -1228,10 +1372,11 @@ public:
 
                     }, remoteArgs);
             }
-        } 
+        }
         catch (std::exception&) {
             RaiseError(m_id, DelegateError::ERR_DESERIALIZE_EXCEPTION);
         }
+#endif
 
         return true;
     }
@@ -1298,8 +1443,13 @@ private:
         m_error = error;
         if (m_errorHandler) {
             m_errorHandler(id, error, auxCode);
-        } else {
+        }
+        else {
+#if !defined(__cpp_exceptions) || defined(DMQ_ASSERTS)
+            // No throw
+#else
             throw std::runtime_error("Delegate remote error.");
+#endif
         }
     }
 
