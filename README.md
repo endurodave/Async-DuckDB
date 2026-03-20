@@ -1,109 +1,160 @@
-![License MIT](https://img.shields.io/github/license/BehaviorTree/BehaviorTree.CPP?color=blue)
-[![conan Ubuntu](https://github.com/endurodave/DuckDB-SQLite/actions/workflows/cmake_ubuntu.yml/badge.svg)](https://github.com/endurodave/DuckDB-SQLite/actions/workflows/cmake_ubuntu.yml)
-[![conan Ubuntu](https://github.com/endurodave/DuckDB-SQLite/actions/workflows/cmake_clang.yml/badge.svg)](https://github.com/endurodave/DuckDB-SQLite/actions/workflows/cmake_clang.yml)
-[![conan Windows](https://github.com/endurodave/DuckDB-SQLite/actions/workflows/cmake_windows.yml/badge.svg)](https://github.com/endurodave/DuckDB-SQLite/actions/workflows/cmake_windows.yml)
+# Async-DuckDB
 
-# Asynchronous DuckDB API using C++ Delegates
+[![License MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![Build Ubuntu](https://github.com/endurodave/Async-DuckDB/actions/workflows/cmake_ubuntu.yml/badge.svg)](https://github.com/endurodave/Async-DuckDB/actions/workflows/cmake_ubuntu.yml)
+[![Build Clang](https://github.com/endurodave/Async-DuckDB/actions/workflows/cmake_clang.yml/badge.svg)](https://github.com/endurodave/Async-DuckDB/actions/workflows/cmake_clang.yml)
+[![Build Windows](https://github.com/endurodave/Async-DuckDB/actions/workflows/cmake_windows.yml/badge.svg)](https://github.com/endurodave/Async-DuckDB/actions/workflows/cmake_windows.yml)
 
-An asynchronous DuckDB API wrapper implemented using a C++ delegate libraries. All target platforms are supported including Windows, Linux, and embedded systems.
+An asynchronous, thread-safe C++ wrapper for [DuckDB](https://duckdb.org/) using [DelegateMQ](https://github.com/endurodave/DelegateMQ) for task-based marshalling.
 
-# Table of Contents
+---
 
-- [Asynchronous DuckDB API using C++ Delegates](#asynchronous-duckdb-api-using-c-delegates)
-- [Table of Contents](#table-of-contents)
-- [Async-DuckDB Overview](#async-duckdb-overview)
+## Table of Contents
+- [Async-DuckDB](#async-duckdb)
+  - [Table of Contents](#table-of-contents)
+  - [Overview](#overview)
+  - [Architectural Benefits](#architectural-benefits)
   - [References](#references)
-- [Getting Started](#getting-started)
-- [Delegate Quick Start](#delegate-quick-start)
+  - [Quick Start](#quick-start)
+  - [Design Pattern](#design-pattern)
+  - [API Usage](#api-usage)
+    - [Simple Query](#simple-query)
+    - [Asynchronous Futures](#asynchronous-futures)
+    - [Prepared Statements](#prepared-statements)
+    - [Appender (Bulk Loading)](#appender-bulk-loading)
+    - [Transactions](#transactions)
+  - [Stress Testing](#stress-testing)
+  - [Build Instructions](#build-instructions)
+    - [Prerequisites](#prerequisites)
+    - [Windows (MSVC)](#windows-msvc)
 
-# Async-DuckDB Overview
+---
 
-Async-DuckDB is a thread-safe, asynchronous C++ wrapper for the DuckDB database engine, powered by the DelegateMQ messaging library.
+## Overview
 
-**The Challenge**
+DuckDB is a high-performance analytical database designed to run in-process. While it is incredibly fast for OLAP tasks, its internal architecture means that **Connection** and **PreparedStatement** objects are **not thread-safe**. Sharing a single connection across multiple threads without manual synchronization leads to undefined behavior or crashes.
 
-DuckDB is a high-performance in-process SQL OLAP database designed for fast analytical queries. However, its "embedded" nature means it runs within your application's process space.
+**Async-DuckDB** provides a non-blocking, thread-safe proxy layer. It allows any number of application threads to share a single DuckDB database instance by marshalling all calls to a dedicated worker thread. This eliminates the need for complex locking in your application code.
 
-Blocking Operations: Complex analytical queries (aggregations on millions of rows) can take hundreds of milliseconds or seconds. Executing these on the main thread (GUI or request handler) freezes the application.
+## Architectural Benefits
 
-Thread Safety & Contention: While DuckDB supports Multi-Version Concurrency Control (MVCC), managing connection lifecycles and query execution across unrestricted threads can lead to resource contention and non-deterministic behavior in complex applications.
-
-**The Solution**
-
-This project leverages DelegateMQ to marshal all database operations to a dedicated background worker thread.
-
-* **Non-Blocking API:** The main thread remains responsive. Heavy SQL operations return a std::future or trigger a callback immediately, while the work happens in the background.
-
-* **Serialized Access:** Database tasks are serialized through a thread-safe message queue. This guarantees a deterministic order of execution without the complexity of manual mutex locking.
-
-* **Simplified Concurrency:** Developers can write code that looks synchronous (using C++ delegates) while the execution behavior is fully asynchronous and thread-safe.
-
-**Architecture**
-
-All calls to the `async::Connection` proxy are automatically wrapped in a lambda and dispatched to the private DuckDB thread.
-
-```cpp
-// 1. Caller (Main Thread)
-auto future = conn.QueryFuture("SELECT avg(price) FROM huge_table");
-
-// 2. DelegateMQ (Internal)
-//    - Packages the lambda
-//    - Pushes to Thread Message Queue
-//    - Returns std::future immediately
-
-// 3. Worker Thread (Background)
-//    - Pops message
-//    - Executes DuckDB Query
-//    - Sets promise value
-```
-
-This pattern ensures your application remains fluid even when crunching massive datasets.
+*   **Thread Affinity**: All raw DuckDB engine calls are executed on a single background "DuckDB Thread."
+*   **Eliminates Lock Contention**: User threads never block each other waiting for database access; tasks are queued and executed sequentially.
+*   **Non-Blocking UI/Logic**: Heavy analytical queries can be dispatched using `std::future`, keeping the main thread responsive.
+*   **Materialized Results**: Query results are automatically materialized on the worker thread before being returned, ensuring they are safe to access from any thread.
+*   **Sequential Integrity**: Database operations are guaranteed to execute in the order they were dispatched (FIFO).
 
 ## References
 
-* <a href="https://github.com/endurodave/DelegateMQ">DelegatesMQ</a> - Invoke any C++ callable function synchronously, asynchronously, or on a remote endpoint.
-* <a href="https://duckdb.org/">DuckDB</a> - An in-process SQL OLAP database management system designed for fast analytical queries on large datasets.
+- [DuckDB](https://duckdb.org/) - The analytical database engine.
+- [DelegateMQ](https://github.com/endurodave/DelegateMQ) - The underlying messaging middleware used for thread marshalling.
 
-# Getting Started
-[CMake](https://cmake.org/) is used to create the project build files on any Windows or Linux machine.
-
-1. Clone the repository.
-2. From the repository root, run the following CMake command:   
-   `cmake -B Build .`
-3. Build and run the project within the `Build` directory. 
-
-# Delegate Quick Start
-
-The DelegateMQ contains delegates and delegate containers. The example below creates a delegate with the target function `MyTestFunc()`. The first example is a synchronously delegate function call, and the second example asynchronously. Notice the only difference is adding a thread instance `myThread` argument. See [DelegateMQ](https://github.com/endurodave/DelegateMQ) repository for more details.
+## Quick Start
 
 ```cpp
-#include "DelegateMQ.h"
+#include "DuckDB/async_duckdb.hpp"
 
-using namespace DelegateMQ;
+int main() {
+    async::init_worker(); // Start the background thread
 
-void MyTestFunc(int val)
-{
-    printf("%d", val);
-}
+    async::Database db(":memory:");
+    async::Connection conn(db);
 
-int main(void)
-{
-    // Create a synchronous delegate
-    auto syncDelegate = MakeDelegate(&MyTestFunc);
+    conn.Query("CREATE TABLE test (val INTEGER);");
+    conn.Query("INSERT INTO test VALUES (42);");
 
-    // Invoke MyTestFunc() synchronously
-    syncDelegate(123);
-    // Create an asynchronous non-blocking delegate
-    auto asyncDelegate = MakeDelegate(&MyTestFunc, myThread);
+    auto result = conn.Query("SELECT * FROM test;");
+    // Use result...
 
-    // Invoke MyTestFunc() asynchronously (non-blocking)
-    asyncDelegate(123);
-
-    // Create an asynchronous blocking delegate
-    auto asyncDelegateWait = MakeDelegate(&MyTestFunc, myThread, WAIT_INFINITE);
-
-    // Invoke MyTestFunc() asynchronously (blocking)
-    asyncDelegateWait(123);
+    async::shutdown_worker();
 }
 ```
 
+## Design Pattern
+
+Async-DuckDB employs the **Proxy/Worker** pattern using C++ Delegates:
+1.  **Proxy Objects**: `async::Connection`, `async::PreparedStatement`, etc., act as lightweight handles.
+2.  **Delegate Marshalling**: When an API is called, a delegate is created containing the task.
+3.  **Task Queue**: The delegate is dispatched to the background worker thread's message queue.
+4.  **Synchronous/Asynchronous Execution**: The proxy waits for a signal (Sync) or returns a `std::future` (Async).
+
+---
+
+## API Usage
+
+### Simple Query
+Standard blocking call. The calling thread waits until the query completes on the worker thread.
+```cpp
+auto result = conn.Query("SELECT name FROM users WHERE id = 1;");
+```
+
+### Asynchronous Futures
+Dispatches the query and returns immediately. Ideal for long-running analytical tasks.
+```cpp
+std::future<std::unique_ptr<duckdb::QueryResult>> future = conn.QueryFuture("SELECT avg(val) FROM large_table;");
+
+// ... do other work ...
+
+auto result = future.get(); // Get the result when ready
+```
+
+### Prepared Statements
+Thread-safe parameter binding. Each `Bind` call is marshalled to the worker thread to ensure the statement state is updated correctly before execution.
+```cpp
+auto stmt = conn.Prepare("INSERT INTO products VALUES (?, ?, ?);");
+stmt->Bind(1, 101);
+stmt->Bind(2, "Laptop");
+stmt->Bind(3, 1200.50);
+stmt->Execute();
+```
+
+### Appender (Bulk Loading)
+Wraps the DuckDB Appender API for high-speed data ingestion.
+```cpp
+auto appender = conn.CreateAppender("metrics");
+appender->BeginRow();
+appender->Append(1.5);
+appender->Append("cpu_usage");
+appender->EndRow();
+appender->Flush();
+```
+
+### Transactions
+Full support for ACID transactions.
+```cpp
+conn.BeginTransaction();
+try {
+    conn.Query("UPDATE accounts SET balance = balance - 100 WHERE id = 1;");
+    conn.Commit();
+} catch (...) {
+    conn.Rollback();
+}
+```
+
+---
+
+## Stress Testing
+
+The repository includes a rigorous stress test (`Examples/StressTest.cpp`) that:
+- Spawns **8 concurrent threads**.
+- Performs **1,600 mixed operations** (synchronous inserts and asynchronous queries).
+- Validates data integrity and ensures zero race conditions in parameter binding.
+
+## Build Instructions
+
+### Prerequisites
+- C++17 compatible compiler (MSVC, GCC, or Clang).
+- CMake 3.10+.
+
+### Windows (MSVC)
+```powershell
+mkdir build
+cd build
+cmake ..
+cmake --build . --config Release
+```
+
+The build produces a single executable `Async-DuckDBApp` which runs all examples, stress tests, and unit tests.
+
+---
+*Created by David Lafreniere, 2026.*

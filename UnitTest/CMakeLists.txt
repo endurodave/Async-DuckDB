@@ -10,7 +10,11 @@ add_library(UnitTestLib STATIC ${SUBDIR_SOURCES} ${SUBDIR_HEADERS})
 # Include directories for the library
 target_include_directories(UnitTestLib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 
-# Add /bigobj flag for MSVC 
+# Add compiler flags for MSVC 
 if (MSVC)
-    target_compile_options(UnitTestLib PRIVATE /bigobj)
+    target_compile_options(UnitTestLib PRIVATE 
+        /bigobj
+        /wd4005     # Suppress macro redefinition warnings
+        /wd4146     # Suppress 'unary minus applied to unsigned' (DuckDB header warning)
+    )
 endif()

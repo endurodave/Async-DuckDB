@@ -37,12 +37,26 @@ file(GLOB SOURCES
     "*.h" 
     "DuckDB/async_duckdb.cpp" 
     "DuckDB/async_duckdb.hpp"
+    "Examples/SimpleExample.cpp"
+    "Examples/FutureExample.cpp"
+    "Examples/PreparedStatementExample.cpp"
+    "Examples/AppenderExample.cpp"
+    "Examples/TransactionExample.cpp"
+    "Examples/StressTest.cpp"
 )
 
 list(APPEND SOURCES ${DMQ_PREDEF_SOURCES})
 
 source_group("Delegate Files" FILES ${DMQ_LIB_SOURCES})
 source_group("DuckDB Files" FILES "DuckDB/async_duckdb.cpp" "DuckDB/async_duckdb.hpp")
+source_group("Example Files" FILES 
+    "Examples/SimpleExample.cpp" 
+    "Examples/FutureExample.cpp" 
+    "Examples/PreparedStatementExample.cpp" 
+    "Examples/AppenderExample.cpp" 
+    "Examples/TransactionExample.cpp"
+    "Examples/StressTest.cpp"
+)
 
 # ------------------------------------------------------------------------------
 # 4. Include Paths
@@ -51,6 +65,7 @@ include_directories(
     ${DMQ_ROOT_DIR}
     DuckDB
     UnitTest
+    Examples
 )
 
 # ------------------------------------------------------------------------------
@@ -60,6 +75,7 @@ add_executable(Async-DuckDBApp ${SOURCES} ${DMQ_LIB_SOURCES})
 
 # Add subdirectories to build
 add_subdirectory(UnitTest)
+
 
 # ------------------------------------------------------------------------------
 # 6. Linking

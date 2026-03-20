@@ -110,6 +110,7 @@ namespace async
         void AppendValue(duckdb::Value val);
 
         std::shared_ptr<duckdb::Appender> m_appender;
+        std::vector<duckdb::Value>        m_pending_row;
     };
 
     // -------------------------------------------------------------------------

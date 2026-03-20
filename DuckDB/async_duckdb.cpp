@@ -41,6 +41,16 @@ namespace async
     template<typename T>
     struct is_query_result_ptr<T, std::void_t<decltype(std::declval<T>().operator->()->HasError())>> : std::true_type {};
 
+    // Ensures a QueryResult is fully materialized on the worker thread before being
+    // handed to the caller. StreamQueryResult is tied to the connection and must not
+    // be accessed from another thread; this converts it to MaterializedQueryResult.
+    static std::unique_ptr<duckdb::QueryResult> EnsureMaterialized(std::unique_ptr<duckdb::QueryResult> result) {
+        if (!result || result->type != duckdb::QueryResultType::STREAM_RESULT) {
+            return result;
+        }
+        return static_cast<duckdb::StreamQueryResult&>(*result).Materialize();
+    }
+
     // --------------------------------------------------------------------------------
     // Helper: RunAsync (Returns std::future immediately)
     // --------------------------------------------------------------------------------
@@ -178,27 +188,28 @@ namespace async
     }
 
     void PreparedStatement::BindValue(duckdb::idx_t index, duckdb::Value val) {
-        DispatchTask([state = m_state, index, v = std::move(val)]() {
+        if (index == 0) throw std::out_of_range("DuckDB Bind index starts at 1");
+        auto task = [state = m_state, index, v = std::move(val)]() {
             if (state->stmt && state->stmt->success) {
-                if (index == 0) throw std::out_of_range("DuckDB Bind index starts at 1");
                 if (state->params.size() < index) {
                     state->params.resize(index);
                 }
                 state->params[index - 1] = v;
             }
-            });
+            };
+        RunSync(MAX_WAIT, task);
     }
 
     std::unique_ptr<duckdb::QueryResult> PreparedStatement::Execute(dmq::Duration timeout) {
-        auto task = [state = m_state]() -> std::unique_ptr<duckdb::QueryResult> { 
-            return state->stmt->Execute(state->params); 
+        auto task = [state = m_state]() -> std::unique_ptr<duckdb::QueryResult> {
+            return EnsureMaterialized(state->stmt->Execute(state->params));
         };
         return RunSync(timeout, task);
     }
 
     std::future<std::unique_ptr<duckdb::QueryResult>> PreparedStatement::ExecuteFuture() {
         auto task = [state = m_state]() -> std::unique_ptr<duckdb::QueryResult> {
-            return state->stmt->Execute(state->params);
+            return EnsureMaterialized(state->stmt->Execute(state->params));
             };
         return RunAsync(task);
     }
@@ -225,12 +236,19 @@ namespace async
 
     void Appender::BeginRow() {
         if (!m_appender) return;
-        RunSync(MAX_WAIT, [app = m_appender]() { app->BeginRow(); });
+        m_pending_row.clear();
     }
 
     void Appender::EndRow() {
         if (!m_appender) return;
-        RunSync(MAX_WAIT, [app = m_appender]() { app->EndRow(); });
+        RunSync(MAX_WAIT, [app = m_appender, row = std::move(m_pending_row)]() {
+            app->BeginRow();
+            for (const auto& v : row) {
+                app->Append(v);
+            }
+            app->EndRow();
+        });
+        m_pending_row.clear();
     }
 
     void Appender::Append(const char* val) {
@@ -238,11 +256,7 @@ namespace async
     }
 
     void Appender::AppendValue(duckdb::Value val) {
-        RunSync(MAX_WAIT, [a = m_appender, v = std::move(val)]() {
-            if (a) {
-                a->Append(v);
-            }
-        });
+        m_pending_row.push_back(std::move(val));
     }
 
     void Appender::Flush() {
@@ -272,15 +286,15 @@ namespace async
     }
 
     std::unique_ptr<duckdb::QueryResult> Connection::Query(const std::string& sql, dmq::Duration timeout) {
-        auto task = [this, sql]() -> std::unique_ptr<duckdb::QueryResult> { 
-            return m_conn->Query(sql); 
+        auto task = [this, sql]() -> std::unique_ptr<duckdb::QueryResult> {
+            return EnsureMaterialized(m_conn->Query(sql));
         };
         return RunSync(timeout, task);
     }
 
     std::future<std::unique_ptr<duckdb::QueryResult>> Connection::QueryFuture(const std::string& sql) {
         auto task = [this, sql]() -> std::unique_ptr<duckdb::QueryResult> {
-            return m_conn->Query(sql);
+            return EnsureMaterialized(m_conn->Query(sql));
             };
         return RunAsync(task);
     }
