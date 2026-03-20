@@ -7,7 +7,7 @@
 #include <atomic>
 #include <chrono>
 
-void RunStressTest() {
+bool RunStressTest() {
     std::cout << "\n--- Running Stress Test ---\n";
 
     try {
@@ -74,8 +74,11 @@ void RunStressTest() {
         auto thread_counts = main_conn.Query("SELECT thread_id, count(*) FROM stress GROUP BY thread_id ORDER BY thread_id;");
         std::cout << "Rows per thread (should be " << OPS_PER_THREAD / 2 << "):" << std::endl;
         PrintResult(thread_counts.get());
+        
+        return (errors.load() == 0);
     }
     catch (const std::exception& e) {
         std::cerr << "Stress test failed: " << e.what() << std::endl;
+        return false;
     }
 }

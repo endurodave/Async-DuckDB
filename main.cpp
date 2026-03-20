@@ -24,23 +24,29 @@ void DeleteDatabaseFiles() {
 int main(void)
 {
     DeleteDatabaseFiles();
+    bool all_examples_passed = true;
     try {
         async::init_worker();
         
         std::cout << "=== Starting Async-DuckDB Examples ===\n";
-        RunSimpleExample();
-        RunFutureExample();
-        RunPreparedStatementExample();
-        RunAppenderExample();
-        RunTransactionExample();
-        RunStressTest();
-        std::cout << "\n=== All Examples Completed ===\n";
+        all_examples_passed &= RunSimpleExample();
+        all_examples_passed &= RunFutureExample();
+        all_examples_passed &= RunPreparedStatementExample();
+        all_examples_passed &= RunAppenderExample();
+        all_examples_passed &= RunTransactionExample();
+        all_examples_passed &= RunStressTest();
+        
+        if (all_examples_passed) {
+            std::cout << "\n=== All Examples Completed Successfully ===\n";
+        } else {
+            std::cerr << "\n!!! Some Examples Failed !!!\n";
+        }
 
-        int ret = RunUnitTests();
+        int ut_ret = RunUnitTests();
         
         async::shutdown_worker();
         
-        return ret;
+        return (all_examples_passed && ut_ret == 0) ? 0 : 1;
     }
     catch (const std::exception& e) {
         std::cerr << "Unhandled Exception: " << e.what() << std::endl;

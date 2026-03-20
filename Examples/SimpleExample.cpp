@@ -4,10 +4,10 @@
 
 #include "Examples.h"
 
-void RunSimpleExample() {
+bool RunSimpleExample() {
     try {
         std::cout << "\n--- Running Simple Example ---\n";
-        // 1. Open Database (Creates 'simple.db' on disk)
+        // 1. Open Database (In-memory)
         async::Database db("");
         async::Connection conn(db);
 
@@ -32,8 +32,11 @@ void RunSimpleExample() {
         std::cout << "Final user list:" << std::endl;
         result = conn.Query("SELECT name, age FROM users;");
         PrintResult(result.get());
+        
+        return true;
     }
     catch (const std::exception& e) {
         std::cerr << "SimpleExample Error: " << e.what() << std::endl;
+        return false;
     }
 }

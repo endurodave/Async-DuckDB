@@ -5,7 +5,7 @@
 
 #include "Examples.h"
 
-void RunFutureExample() {
+bool RunFutureExample() {
     try {
         std::cout << "\n--- Running Future Example ---\n";
         async::Database db("");
@@ -35,8 +35,11 @@ void RunFutureExample() {
         // Wait for the final result
         auto result = selectFuture.get();
         PrintResult(result.get());
+        
+        return true;
     }
     catch (const std::exception& e) {
         std::cerr << "FutureExample Error: " << e.what() << std::endl;
+        return false;
     }
 }

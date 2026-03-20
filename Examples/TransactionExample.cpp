@@ -4,7 +4,7 @@
 
 #include "Examples.h"
 
-void RunTransactionExample() {
+bool RunTransactionExample() {
     try {
         std::cout << "\n--- Running Transaction Example ---\n";
         async::Database db("");
@@ -26,14 +26,15 @@ void RunTransactionExample() {
             std::cout << "Transaction committed." << std::endl;
         } catch (...) {
             conn.Rollback();
-            std::cout << "Transaction rolled back due to error." << std::endl;
+            std::cerr << "Transaction failed unexpectedly!" << std::endl;
+            return false;
         }
 
         std::cout << "Balances after successful transfer:" << std::endl;
         PrintResult(conn.Query("SELECT * FROM accounts;").get());
 
         // 2. Rolled back transaction
-        std::cout << "\nStarting failing transaction (transfer 100 but force failure)..." << std::endl;
+        std::cout << "\nStarting failing transaction (intentional failure to test rollback)..." << std::endl;
         conn.BeginTransaction();
         try {
             conn.Query("UPDATE accounts SET balance = balance - 100 WHERE id = 1;");
@@ -42,16 +43,21 @@ void RunTransactionExample() {
             conn.Query("SELECT * FROM non_existent_table;");
             
             conn.Commit();
+            std::cerr << "Transaction should have failed but didn't!" << std::endl;
+            return false;
         } catch (const std::exception& e) {
-            std::cout << "Caught expected error: " << e.what() << std::endl;
+            std::cout << "[EXPECTED ERROR] Transaction failed as planned: " << e.what() << std::endl;
             conn.Rollback();
-            std::cout << "Transaction rolled back." << std::endl;
+            std::cout << "Transaction successfully rolled back." << std::endl;
         }
 
         std::cout << "Balances after failed transfer (should be unchanged):" << std::endl;
         PrintResult(conn.Query("SELECT * FROM accounts;").get());
+        
+        return true;
     }
     catch (const std::exception& e) {
         std::cerr << "TransactionExample Error: " << e.what() << std::endl;
+        return false;
     }
 }

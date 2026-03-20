@@ -1,11 +1,11 @@
 #ifndef EXAMPLES_H
 #define EXAMPLES_H
 
-void RunSimpleExample();
-void RunFutureExample();
-void RunPreparedStatementExample();
-void RunAppenderExample();
-void RunTransactionExample();
-void RunStressTest();
+bool RunSimpleExample();
+bool RunFutureExample();
+bool RunPreparedStatementExample();
+bool RunAppenderExample();
+bool RunTransactionExample();
+bool RunStressTest();
 
 #endif // EXAMPLES_H

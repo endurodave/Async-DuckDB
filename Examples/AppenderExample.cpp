@@ -4,7 +4,7 @@
 
 #include "Examples.h"
 
-void RunAppenderExample() {
+bool RunAppenderExample() {
     try {
         std::cout << "\n--- Running Appender Example ---\n";
         async::Database db("");
@@ -34,8 +34,11 @@ void RunAppenderExample() {
         std::cout << "Total rows in 'metrics':" << std::endl;
         auto result = conn.Query("SELECT count(*) FROM metrics;");
         PrintResult(result.get());
+        
+        return true;
     }
     catch (const std::exception& e) {
         std::cerr << "AppenderExample Error: " << e.what() << std::endl;
+        return false;
     }
 }

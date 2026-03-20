@@ -4,7 +4,7 @@
 
 #include "Examples.h"
 
-void RunPreparedStatementExample() {
+bool RunPreparedStatementExample() {
     try {
         std::cout << "\n--- Running Prepared Statement Example ---\n";
         async::Database db("");
@@ -40,8 +40,11 @@ void RunPreparedStatementExample() {
         std::cout << "Products with price > 50.0:" << std::endl;
         auto result = selectStmt->Execute();
         PrintResult(result.get());
+        
+        return true;
     }
     catch (const std::exception& e) {
         std::cerr << "PreparedStatementExample Error: " << e.what() << std::endl;
+        return false;
     }
 }
