@@ -140,6 +140,29 @@ The repository includes a rigorous stress test (`Examples/StressTest.cpp`) that:
 - Performs **1,600 mixed operations** (synchronous inserts and asynchronous queries).
 - Validates data integrity and ensures zero race conditions in parameter binding.
 
+## DuckDB Library Setup
+
+The project requires the DuckDB C++ library (amalgamation) and binaries. 
+
+### Local Development Setup
+For local development, you must place the DuckDB library files in the `DuckDB/` directory:
+
+1.  **Download**: Visit the [DuckDB Releases](https://github.com/duckdb/duckdb/releases/tag/v1.4.3) page.
+2.  **Windows**: 
+    - Download `libduckdb-windows-amd64.zip`.
+    - Extract `duckdb.lib` and `duckdb.dll` into the `DuckDB/` folder.
+3.  **Linux/macOS**:
+    - Download the appropriate `libduckdb` zip for your architecture.
+    - Extract `libduckdb.so` (or `.a`) into the `DuckDB/` folder.
+4.  **Headers**: Ensure `duckdb.h` and `duckdb.hpp` are also in the `DuckDB/` folder (these are typically included in the amalgamation or lib zip).
+
+The `CMakeLists.txt` is configured to look in the `DuckDB/` directory first (`NO_DEFAULT_PATH`) to ensure the correct version is linked.
+
+### Continuous Integration (CI)
+The included GitHub Action workflows (`.github/workflows/`) automatically download the correct DuckDB v1.4.3 binaries for Windows and Ubuntu during the build process. No manual setup is required for CI.
+
+---
+
 ## Build Instructions
 
 ### Prerequisites
