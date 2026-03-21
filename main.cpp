@@ -1,7 +1,23 @@
-// Asynchronous DuckDB API's implemented using C++ delegates
-// @see https://github.com/endurodave/Async-DuckDB
-// @see https://github.com/endurodave/DelegateMQ
-// David Lafreniere, 2026.
+// main.cpp
+// Async-DuckDB Entry Point
+// 
+// This application demonstrates the usage of Async-DuckDB, an asynchronous, 
+// thread-safe proxy layer for the DuckDB analytical database engine.
+// 
+// Design Philosophy:
+// 1. Proxy-Worker Pattern: User threads interact with 'async' proxy objects 
+//    while all raw DuckDB operations are marshalled to a dedicated worker thread.
+// 2. Thread Affinity: Ensures the non-thread-safe DuckDB Connection objects 
+//    are only accessed from a single, consistent thread.
+// 3. Non-Blocking execution: Leverages C++ Delegates (DelegateMQ) and 
+//    std::future to allow heavy analytical queries without blocking the UI or 
+//    main application logic.
+// 
+// This main executes a comprehensive suite of examples, stress tests, and 
+// unit tests to verify the robustness and correctness of the wrapper.
+// 
+// @author David Lafreniere
+// @date 2026
 
 #include "DelegateMQ.h"
 #include "DuckDB/async_duckdb.hpp"

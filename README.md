@@ -24,6 +24,10 @@ An asynchronous, thread-safe C++ wrapper for [DuckDB](https://duckdb.org/) using
     - [Appender (Bulk Loading)](#appender-bulk-loading)
     - [Transactions](#transactions)
   - [Stress Testing](#stress-testing)
+  - [Performance: Serialized Entry vs. Parallel Execution](#performance-serialized-entry-vs-parallel-execution)
+  - [DuckDB Library Setup](#duckdb-library-setup)
+    - [Local Development Setup](#local-development-setup)
+    - [Continuous Integration (CI)](#continuous-integration-ci)
   - [Build Instructions](#build-instructions)
     - [Prerequisites](#prerequisites)
     - [Windows (MSVC)](#windows-msvc)
@@ -139,6 +143,15 @@ The repository includes a rigorous stress test (`Examples/StressTest.cpp`) that:
 - Spawns **8 concurrent threads**.
 - Performs **1,600 mixed operations** (synchronous inserts and asynchronous queries).
 - Validates data integrity and ensures zero race conditions in parameter binding.
+
+## Performance: Serialized Entry vs. Parallel Execution
+
+A common question is whether marshalling all calls to a single worker thread limits DuckDB's famous multi-threaded performance. The answer is **no**.
+
+*   **Serialized Entry**: `Async-DuckDB` serializes the *entry point* (the API calls) to ensure that the `Connection` and `PreparedStatement` state is never corrupted by concurrent access. This prevents "Database is locked" errors and race conditions.
+*   **Parallel Execution**: Once a query is dispatched to the DuckDB engine, its internal **Morsel-Driven Parallelism** kicks in. DuckDB will still automatically spawn its own internal tasks across all available CPU cores to execute that single query as fast as possible.
+
+**The result**: You get the absolute thread-safety of a serialized proxy with the full analytical muscle of DuckDB's parallel columnar engine.
 
 ## DuckDB Library Setup
 

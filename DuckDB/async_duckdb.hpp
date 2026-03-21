@@ -1,9 +1,25 @@
+// async_duckdb.hpp
+// Asynchronous C++ wrapper for DuckDB.
+// 
+// Provides a thread-safe, non-blocking interface to the DuckDB engine using the 
+// Proxy-Worker architectural pattern. This wrapper ensures that all raw DuckDB 
+// operations (which are not natively thread-safe) are marshalled to a dedicated 
+// background worker thread.
+// 
+// Key Features:
+// - Thread-Safe Proxies: Connection, PreparedStatement, and Appender objects can 
+//   be used safely from any application thread.
+// - Non-Blocking APIs: Supports QueryFuture for asynchronous execution.
+// - Materialized Results: Ensures query data is fully fetched on the worker 
+//   thread before being handed back to the user thread.
+// - Automated Marshalling: Leverages DelegateMQ for task dispatching.
+// 
+// @author David Lafreniere
+// @date 2026
+// @see https://github.com/endurodave/Async-DuckDB
+
 #ifndef ASYNC_DUCKDB_H
 #define ASYNC_DUCKDB_H
-
-// Asynchronous DuckDB wrapper using C++ Delegates
-// @see https://github.com/endurodave/DelegateMQ
-// David Lafreniere, Jan 2026
 
 #include "duckdb.hpp"
 #include "DelegateMQ.h" 
@@ -38,7 +54,7 @@ namespace async
         Database(const char* path, dmq::Duration timeout = MAX_WAIT);
         ~Database();
 
-        duckdb::DuckDB* unsafe_raw() { return m_db.get(); }
+        std::shared_ptr<duckdb::DuckDB> get_internal() { return m_db; }
 
     private:
         std::shared_ptr<duckdb::DuckDB> m_db;

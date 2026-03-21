@@ -12,6 +12,7 @@
 #include <iostream>
 #include <type_traits>
 #include <optional>
+#include <atomic>
 
 using namespace dmq;
 
@@ -19,7 +20,7 @@ namespace async
 {
     // A private worker thread instance
     static Thread DuckThread("DuckDB Thread");
-    static IThread* CentralThread = &DuckThread;
+    static std::atomic<IThread*> CentralThread{ &DuckThread };
 
     const std::string PreparedStatement::m_empty_error = "";
 
@@ -28,9 +29,10 @@ namespace async
     // --------------------------------------------------------------------------------
     void DispatchTask(std::function<void()> task)
     {
-        if (!CentralThread) return;
+        IThread* thread = CentralThread.load();
+        if (!thread) return;
         
-        auto delegate = dmq::MakeDelegate(task, *CentralThread);
+        auto delegate = dmq::MakeDelegate(task, *thread);
         delegate.AsyncInvoke();
     }
 
@@ -89,8 +91,9 @@ namespace async
     {
         using RetType = std::invoke_result_t<std::decay_t<Func>, std::decay_t<Args>...>;
 
+        IThread* thread = CentralThread.load();
         // If we are already on the worker thread, just run it
-        if (CentralThread->IsCurrentThread()) {
+        if (thread && thread->IsCurrentThread()) {
             return std::invoke(func, std::forward<Args>(args)...);
         }
 
@@ -144,36 +147,39 @@ namespace async
     // --------------------------------------------------------------------------------
     void init_worker(IThread* thread) { 
         if (thread) {
-            CentralThread = thread;
+            CentralThread.store(thread);
         } else {
             DuckThread.CreateThread(); 
-            CentralThread = &DuckThread;
+            CentralThread.store(&DuckThread);
         }
     }
     
     void shutdown_worker() { 
-        if (CentralThread == &DuckThread) {
+        IThread* thread = CentralThread.load();
+        if (thread == &DuckThread) {
             DuckThread.ExitThread(); 
         }
-        CentralThread = nullptr;
+        CentralThread.store(nullptr);
     }
     
-    IThread* get_worker_thread() { return CentralThread; }
+    IThread* get_worker_thread() { return CentralThread.load(); }
 
     // --------------------------------------------------------------------------------
     // Database Proxy
     // --------------------------------------------------------------------------------
     Database::Database(const char* path, dmq::Duration timeout) {
-        auto task = [this, p = (path ? std::string(path) : std::string())]() {
+        auto task = [p = (path ? std::string(path) : std::string())]() -> std::shared_ptr<duckdb::DuckDB> {
             const char* dbPath = p.empty() ? nullptr : p.c_str();
-            m_db = std::make_shared<duckdb::DuckDB>(dbPath);
-            };
-        RunSync(timeout, task);
+            return std::make_shared<duckdb::DuckDB>(dbPath);
+        };
+        m_db = RunSync(timeout, task);
     }
 
     Database::~Database() {
         if (!m_db) return;
-        auto task = [db = std::move(m_db)]() {};
+        auto task = [db = std::move(m_db)]() {
+            // db shared_ptr destroyed here on worker thread
+        };
         DispatchTask(task);
     }
 
@@ -182,13 +188,17 @@ namespace async
     // --------------------------------------------------------------------------------
     PreparedStatement::~PreparedStatement() {
         if (m_state) {
-            auto task = [state = std::move(m_state)]() {};
+            auto task = [state = std::move(m_state)]() {
+                // state shared_ptr destroyed here on worker thread
+            };
             DispatchTask(task);
         }
     }
 
     void PreparedStatement::BindValue(duckdb::idx_t index, duckdb::Value val) {
         if (index == 0) throw std::out_of_range("DuckDB Bind index starts at 1");
+        if (index > 1000) throw std::out_of_range("DuckDB Bind index exceeds sanity limit");
+
         auto task = [state = m_state, index, v = std::move(val)]() {
             if (state->stmt && state->stmt->success) {
                 if (state->params.size() < index) {
@@ -217,7 +227,7 @@ namespace async
     duckdb::idx_t PreparedStatement::nParam() {
         return RunSync(MAX_WAIT, [state = m_state]() {
             if (!state->stmt || !state->stmt->success) return (duckdb::idx_t)0;
-            return (duckdb::idx_t)state->stmt->named_param_map.size();
+            return (duckdb::idx_t)state->stmt->GetExpectedParameterTypes().size();
             });
     }
 
@@ -227,8 +237,10 @@ namespace async
     Appender::~Appender() {
         if (m_appender) {
             auto task = [app = std::move(m_appender)]() {
-                app->Flush();
-                app->Close();
+                try {
+                    app->Flush();
+                    app->Close();
+                } catch (...) {}
                 };
             DispatchTask(task);
         }
@@ -248,7 +260,6 @@ namespace async
             }
             app->EndRow();
         });
-        m_pending_row.clear();
     }
 
     void Appender::Append(const char* val) {
@@ -273,35 +284,38 @@ namespace async
     // Connection Proxy
     // --------------------------------------------------------------------------------
     Connection::Connection(Database& db, dmq::Duration timeout) {
-        auto task = [this, &db]() {
-            m_conn = std::make_unique<duckdb::Connection>(*db.unsafe_raw());
-            };
-        RunSync(timeout, task);
+        auto db_shared = db.get_internal();
+        auto task = [db_shared]() -> std::shared_ptr<duckdb::Connection> {
+            return std::make_shared<duckdb::Connection>(*db_shared);
+        };
+        m_conn = RunSync(timeout, task);
     }
 
     Connection::~Connection() {
         if (!m_conn) return;
-        auto task = [conn = std::move(m_conn)]() {};
+        auto task = [conn = std::move(m_conn)]() {
+            // conn shared_ptr destroyed here on worker thread
+        };
         DispatchTask(task);
     }
 
     std::unique_ptr<duckdb::QueryResult> Connection::Query(const std::string& sql, dmq::Duration timeout) {
-        auto task = [this, sql]() -> std::unique_ptr<duckdb::QueryResult> {
-            return EnsureMaterialized(m_conn->Query(sql));
+        auto task = [conn = m_conn, sql]() -> std::unique_ptr<duckdb::QueryResult> {
+            return EnsureMaterialized(conn->Query(sql));
         };
         return RunSync(timeout, task);
     }
 
     std::future<std::unique_ptr<duckdb::QueryResult>> Connection::QueryFuture(const std::string& sql) {
-        auto task = [this, sql]() -> std::unique_ptr<duckdb::QueryResult> {
-            return EnsureMaterialized(m_conn->Query(sql));
+        auto task = [conn = m_conn, sql]() -> std::unique_ptr<duckdb::QueryResult> {
+            return EnsureMaterialized(conn->Query(sql));
             };
         return RunAsync(task);
     }
 
     std::unique_ptr<PreparedStatement> Connection::Prepare(const std::string& sql, dmq::Duration timeout) {
-        auto task = [this, sql]() -> std::unique_ptr<PreparedStatement> {
-            auto raw_stmt = m_conn->Prepare(sql);
+        auto task = [conn = m_conn, sql]() -> std::unique_ptr<PreparedStatement> {
+            auto raw_stmt = conn->Prepare(sql);
             if (!raw_stmt->success) {
                 raw_stmt->error.Throw();
             }
@@ -312,8 +326,8 @@ namespace async
     }
 
     std::unique_ptr<Appender> Connection::CreateAppender(const std::string& table, dmq::Duration timeout) {
-        auto task = [this, table]() -> std::unique_ptr<Appender> {
-            auto raw_app = std::make_unique<duckdb::Appender>(*m_conn, table);
+        auto task = [conn = m_conn, table]() -> std::unique_ptr<Appender> {
+            auto raw_app = std::make_unique<duckdb::Appender>(*conn, table);
             std::shared_ptr<duckdb::Appender> shared_app = std::move(raw_app);
             return std::make_unique<Appender>(shared_app);
             };
@@ -321,15 +335,15 @@ namespace async
     }
 
     void Connection::BeginTransaction() {
-        RunSync(MAX_WAIT, [this]() { m_conn->BeginTransaction(); });
+        RunSync(MAX_WAIT, [conn = m_conn]() { conn->BeginTransaction(); });
     }
 
     void Connection::Commit() {
-        RunSync(MAX_WAIT, [this]() { m_conn->Commit(); });
+        RunSync(MAX_WAIT, [conn = m_conn]() { conn->Commit(); });
     }
 
     void Connection::Rollback() {
-        RunSync(MAX_WAIT, [this]() { m_conn->Rollback(); });
+        RunSync(MAX_WAIT, [conn = m_conn]() { conn->Rollback(); });
     }
 
 } // namespace async
